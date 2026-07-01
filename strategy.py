@@ -1,0 +1,510 @@
+import asyncio
+import math
+from collections import deque
+from datetime import datetime, timezone
+from loguru import logger
+from models import TickerData, TradeSignal
+import database
+
+# ─────────────────────────────────────────────
+#  Configuration constants  (tweak here only)
+# ─────────────────────────────────────────────
+# ── Portfolio: $9,500 USD ────────────────────────────────────────────────────
+# Max per-coin stack (4 layers): $100 + $135 + $182 + $246 + $332 = $995
+# Max 3 coins deployed: ~$2,985  |  Remaining buffer: ~$6,515  (68% safe)
+# Global Kill fires at: −$1,425  |  Per-trade SL fires at: −8% of avg_entry
+# ─────────────────────────────────────────────────────────────────────────────
+BASE_ORDER           = 100.0  # $ for the first buy
+VOLUME_MULTIPLIER    = 1.35   # Gentler curve — max Layer 4 = ~$332 per order
+MAX_DCA_LAYERS       = 4      # Hard cap — 4 layers keeps max per-coin at ~$995
+MAX_CONCURRENT_POS   = 3      # Max symbols in an active DCA stack at once
+
+BB_PERIOD            = 20     # Bollinger Band look-back (in 1-min candles)
+BLACK_SWAN_PERIOD    = 12     # 60 s at 5 s polling → 12 ticks
+BLACK_SWAN_DROP      = 0.15   # 15 % drop in 60 s triggers blacklist
+BLACK_SWAN_MAX       = 3      # Permanent ban after this many events in 24 h
+
+RSI_PERIOD           = 14     # RSI look-back (1-min candles)
+RSI_ENTRY_GATE       = 48     # Loosened: enter when RSI < 48 (was 40 — missed too many quality dips)
+RSI_DCA_SKIP_LOW     = 48     # DCA skip zone: 48–58 (neutral — let position age)
+RSI_DCA_SKIP_HIGH    = 58     # (was 40–60 — now narrower, allows more DCA layers)
+EMA_PERIOD           = 50     # Trend filter — only buy above this EMA (1-min candles)
+
+GRID_TIGHT           = 0.005  # 0.5 % grid when low volatility
+GRID_WIDE            = 0.020  # 2.0 % grid when high volatility
+BB_VOLATILITY_THRESH = 0.020  # BBW above this → wide grid
+
+# Take-profit tranches (must sum to 1.0)
+TP_TRANCHE_1_PCT     = 0.40   # sell 40 % at 1× grid above avg entry
+TP_TRANCHE_2_PCT     = 0.35   # sell 35 % at 2× grid above avg entry
+TP_TRANCHE_3_PCT     = 0.25   # trail remaining 25 % with trailing stop
+
+PER_TRADE_STOP_PCT   = 0.08   # Per-symbol stop-loss: exit if price < avg_entry × (1 − this)
+GLOBAL_KILL_PCT      = 0.15   # Panic-sell all if wallet unrealized loss > 15 % of start
+
+REENTRY_COOLDOWN_S   = 120    # 2-min cooldown after any TP or stop-loss exit (was 300s — too slow)
+BLACKLIST_TIMEOUT_S  = 7200   # 2-hour soft ban after a flash crash
+CANDLE_INTERVAL_S    = 60     # Aggregate 5 s ticks into 1-min candles for indicators
+PANIC_SELL_STAGGER_S = 30     # Seconds between each staggered panic-sell order
+
+
+# ─────────────────────────────────────────────
+#  Indicator helpers
+# ─────────────────────────────────────────────
+
+def _calc_ema(prices: list[float], period: int) -> float:
+    """EMA over a list (oldest → newest). Falls back to SMA if too few points."""
+    if not prices:
+        return 0.0
+    if len(prices) < period:
+        return sum(prices) / len(prices)
+    k = 2.0 / (period + 1)
+    ema = sum(prices[:period]) / period
+    for p in prices[period:]:
+        ema = p * k + ema * (1 - k)
+    return ema
+
+
+def _calc_rsi(closes: list[float], period: int) -> float:
+    """
+    Wilder RSI.  Uses simple average for the seed, then applies Wilder smoothing
+    for any bars beyond the seed window.  Returns 50.0 (neutral) if not enough data.
+    """
+    if len(closes) < period + 1:
+        return 50.0
+    deltas = [closes[i] - closes[i - 1] for i in range(1, len(closes))]
+    seed = deltas[:period]
+    avg_gain = sum(d for d in seed if d > 0) / period
+    avg_loss = sum(-d for d in seed if d < 0) / period
+    for d in deltas[period:]:
+        gain = d if d > 0 else 0.0
+        loss = -d if d < 0 else 0.0
+        avg_gain = (avg_gain * (period - 1) + gain) / period
+        avg_loss = (avg_loss * (period - 1) + loss) / period
+    if avg_loss == 0:
+        return 100.0
+    return 100.0 - (100.0 / (1.0 + avg_gain / avg_loss))
+
+
+# ─────────────────────────────────────────────
+#  Candle aggregator
+# ─────────────────────────────────────────────
+
+class _CandleAggregator:
+    """
+    Rolls up raw 5-second price ticks into completed 1-minute candles using
+    wall-clock deadlines — no silent gaps if a tick happens to straddle a
+    minute boundary.
+    """
+
+    def __init__(self):
+        self._close    = None
+        self._deadline = None
+
+    def feed(self, price: float, ts: datetime) -> float | None:
+        """
+        Feed one raw tick.  Returns the completed candle's close price when a
+        minute boundary is crossed, otherwise None.
+        """
+        now = ts.timestamp()
+        if self._deadline is None:
+            self._deadline = now + CANDLE_INTERVAL_S
+            self._close = price
+            return None
+        if now < self._deadline:
+            self._close = price
+            return None
+        # Candle complete
+        close = self._close
+        self._close    = price
+        self._deadline = now + CANDLE_INTERVAL_S
+        return close
+
+
+# ─────────────────────────────────────────────
+#  Per-symbol state
+# ─────────────────────────────────────────────
+
+class SymbolState:
+    """All mutable state for one trading symbol, in one place."""
+
+    def __init__(self):
+        # Raw 5 s ticks — used only for black-swan detection
+        self.raw_prices: deque = deque(maxlen=BLACK_SWAN_PERIOD)
+
+        # 1-min candle closes — used for all three indicators
+        self.candles: deque = deque(maxlen=max(BB_PERIOD, EMA_PERIOD, RSI_PERIOD + 1) + 5)
+        self.aggregator = _CandleAggregator()
+
+        # ── Position tracking ──
+        self.position_amount: float = 0.0
+        self.total_invested: float  = 0.0
+        self.dca_layer: int         = 0      # 0 = flat, 1 = base order placed, 2+ = DCA layers
+        self.avg_entry: float       = 0.0
+        self.last_buy_price: float  = 0.0
+        self.entry_grid: float      = 0.0   # grid spacing locked in at the time of the base order
+
+        # ── Take-profit tranche flags ──
+        self.tp1_done: bool    = False
+        self.tp2_done: bool    = False
+        self.trail_high: float = 0.0        # highest price seen after TP1; drives trailing stop
+
+        # ── Cooldown / ban ──
+        self.reentry_until: float          = 0.0
+        self.blacklist_until: float        = 0.0   # 0 = not banned; inf = permanent
+        self.flash_crash_count: int        = 0
+        self.flash_crash_window_start: float = 0.0
+
+
+# ─────────────────────────────────────────────
+#  Strategy engine
+# ─────────────────────────────────────────────
+
+class StrategyEngine:
+    def __init__(self, data_queue: asyncio.Queue, order_queue: asyncio.Queue):
+        self.data_queue    = data_queue
+        self.order_queue   = order_queue
+        self.fiat_currency = 'USD'
+
+        self.states: dict[str, SymbolState] = {}
+        self.bot_halted       = False
+        self.starting_balance = 0.0
+
+    # ══════════════════════════════════════════
+    #  Internal helpers
+    # ══════════════════════════════════════════
+
+    def _active_positions(self) -> int:
+        return sum(1 for s in self.states.values() if s.dca_layer > 0)
+
+    def _grid_spacing(self, symbol: str) -> float:
+        """
+        Volatility-adjusted grid spacing from 1-min Bollinger Band width.
+        TP target also scales: max(base_grid, 0.5 × bb_width) so we don't
+        exit too early during high-volatility regimes.
+        """
+        candles = list(self.states[symbol].candles)
+        if len(candles) < BB_PERIOD:
+            return GRID_TIGHT
+        recent = candles[-BB_PERIOD:]
+        sma = sum(recent) / BB_PERIOD
+        if sma == 0:
+            return GRID_TIGHT
+        variance = sum((p - sma) ** 2 for p in recent) / BB_PERIOD
+        bb_width = (4 * math.sqrt(variance)) / sma
+        base_grid = GRID_WIDE if bb_width > BB_VOLATILITY_THRESH else GRID_TIGHT
+        return max(base_grid, 0.5 * bb_width)
+
+    def _indicators(self, symbol: str) -> tuple[float, float]:
+        """Return (ema, rsi) computed on the 1-min candle history."""
+        candles = list(self.states[symbol].candles)
+        return _calc_ema(candles, EMA_PERIOD), _calc_rsi(candles, RSI_PERIOD)
+
+    def _passes_entry_gate(self, symbol: str) -> bool:
+        """
+        Base-order gate:
+          • Price must be above the 50-EMA  (confirmed uptrend)
+          • RSI must be below RSI_ENTRY_GATE (oversold / quality entry)
+        """
+        st = self.states[symbol]
+        price = st.raw_prices[-1] if st.raw_prices else 0.0
+        ema, rsi = self._indicators(symbol)
+        if price <= ema:
+            logger.debug(f"{symbol}: trend FAIL  price={price:.4f} EMA={ema:.4f}")
+            return False
+        if rsi >= RSI_ENTRY_GATE:
+            logger.debug(f"{symbol}: RSI FAIL  RSI={rsi:.1f}")
+            return False
+        return True
+
+    def _passes_dca_gate(self, symbol: str) -> bool:
+        """
+        DCA layer gate:
+          • Only add when RSI < 40 (deep oversold) OR RSI > 60 (strong momentum)
+          • Skip the 40–60 neutral zone — let the position age instead.
+        """
+        _, rsi = self._indicators(symbol)
+        passes = rsi < RSI_DCA_SKIP_LOW or rsi > RSI_DCA_SKIP_HIGH
+        if not passes:
+            logger.debug(f"{symbol}: DCA RSI gate FAIL  RSI={rsi:.1f} (neutral zone)")
+        return passes
+
+    async def _place_buy(self, symbol: str, amount_fiat: float,
+                         price: float, ticker: TickerData, label: str):
+        amount_crypto = amount_fiat / price
+        logger.info(f"BUY  {symbol} | {label} | ${amount_fiat:.2f} @ {price:.4f}")
+        await self.order_queue.put((
+            TradeSignal(symbol=symbol, side='buy',
+                        fiat_currency=self.fiat_currency, amount=amount_crypto),
+            ticker
+        ))
+        st = self.states[symbol]
+        st.position_amount += amount_crypto
+        st.total_invested  += amount_fiat
+        st.last_buy_price   = price
+        st.avg_entry        = st.total_invested / st.position_amount
+        st.dca_layer       += 1
+        st.trail_high       = max(st.trail_high, price)
+
+    async def _place_sell(self, symbol: str, amount_crypto: float,
+                          price: float, ticker: TickerData, label: str):
+        if amount_crypto <= 0:
+            return
+        logger.info(f"SELL {symbol} | {label} | {amount_crypto:.6f} @ {price:.4f}")
+        await self.order_queue.put((
+            TradeSignal(symbol=symbol, side='sell',
+                        fiat_currency=self.fiat_currency, amount=amount_crypto),
+            ticker
+        ))
+        st = self.states[symbol]
+        fraction           = amount_crypto / st.position_amount if st.position_amount > 0 else 1.0
+        st.total_invested  -= st.total_invested * fraction
+        st.position_amount -= amount_crypto
+
+    def _reset_position(self, symbol: str, cooldown: bool = True):
+        st = self.states[symbol]
+        st.position_amount = 0.0
+        st.total_invested  = 0.0
+        st.dca_layer       = 0
+        st.avg_entry       = 0.0
+        st.last_buy_price  = 0.0
+        st.entry_grid      = 0.0
+        st.tp1_done        = False
+        st.tp2_done        = False
+        st.trail_high      = 0.0
+        if cooldown:
+            st.reentry_until = datetime.now(timezone.utc).timestamp() + REENTRY_COOLDOWN_S
+            logger.info(f"{symbol}: {REENTRY_COOLDOWN_S}s re-entry cooldown started.")
+
+    async def _staggered_panic_sell(self):
+        """
+        Close all open positions, worst PnL first (from doc-2: avoids letting
+        the deepest-underwater position fall further while we exit others).
+        Each sell is staggered by PANIC_SELL_STAGGER_S to reduce slippage.
+        """
+        positions = []
+        for sym, st in self.states.items():
+            if st.total_invested > 0 and st.raw_prices:
+                cur_val = st.position_amount * st.raw_prices[-1]
+                pnl     = cur_val - st.total_invested
+                positions.append((pnl, sym, st.position_amount, st.raw_prices[-1]))
+
+        # Sort: most negative PnL first
+        positions.sort(key=lambda x: x[0])
+
+        for pnl, sym, amount, price in positions:
+            logger.critical(f"PANIC SELL {sym} | PnL ${pnl:.2f} | {amount:.6f} @ {price:.4f}")
+            fake_ticker = TickerData(
+                symbol=sym, price_usd=price,
+                price_inr=0, price_eur=0, price_change_percent=0,
+                timestamp=datetime.now(timezone.utc)
+            )
+            await self.order_queue.put((
+                TradeSignal(symbol=sym, side='sell',
+                            fiat_currency=self.fiat_currency, amount=amount),
+                fake_ticker
+            ))
+            st = self.states[sym]
+            st.position_amount = 0.0
+            st.total_invested  = 0.0
+            await asyncio.sleep(PANIC_SELL_STAGGER_S)
+
+    # ══════════════════════════════════════════
+    #  Main event loop
+    # ══════════════════════════════════════════
+
+    async def start(self, shutdown_event: asyncio.Event):
+        logger.info("Starting Volatility-Adjusted DCA Hybrid Engine (v3 — merged)...")
+
+        self.starting_balance = await database.get_balance(self.fiat_currency)
+        logger.info(
+            f"Starting balance : ${self.starting_balance:.2f}  |  "
+            f"Global kill switch : −{GLOBAL_KILL_PCT*100:.0f}%  "
+            f"(−${self.starting_balance * GLOBAL_KILL_PCT:.2f})  |  "
+            f"Per-trade SL : −{PER_TRADE_STOP_PCT*100:.0f}%"
+        )
+
+        while not shutdown_event.is_set():
+            try:
+                ticker: TickerData = await asyncio.wait_for(
+                    self.data_queue.get(), timeout=1.0
+                )
+
+                if self.bot_halted:
+                    self.data_queue.task_done()
+                    continue
+
+                symbol  = ticker.symbol
+                price   = ticker.price_usd
+                now_ts  = datetime.now(timezone.utc).timestamp()
+
+                # ── Initialise state for new symbol ───────────────────
+                if symbol not in self.states:
+                    self.states[symbol] = SymbolState()
+                st = self.states[symbol]
+
+                # ── Feed raw tick ─────────────────────────────────────
+                st.raw_prices.append(price)
+
+                # ── Aggregate raw tick → 1-min candle ─────────────────
+                candle_close = st.aggregator.feed(price, ticker.timestamp)
+                if candle_close is not None:
+                    st.candles.append(candle_close)
+
+                # ════════════════════════════════════════════════════
+                #  RISK LAYER 1 — Black-swan circuit breaker
+                #  Triggers on a >15 % drop within 60 seconds.
+                #  First two events → 2-hour soft ban.
+                #  Third event in 24 h → permanent session ban.
+                #  Open position is closed immediately on detection.
+                # ════════════════════════════════════════════════════
+                if len(st.raw_prices) == st.raw_prices.maxlen:
+                    max_60s = max(st.raw_prices)
+                    if price < max_60s * (1 - BLACK_SWAN_DROP):
+                        # Roll the 24-h window
+                        if now_ts - st.flash_crash_window_start > 86400:
+                            st.flash_crash_count = 0
+                            st.flash_crash_window_start = now_ts
+                        st.flash_crash_count += 1
+
+                        logger.critical(
+                            f"FLASH CRASH {symbol} | drop >{BLACK_SWAN_DROP*100:.0f}% "
+                            f"in 60s | event #{st.flash_crash_count} today"
+                        )
+
+                        if st.flash_crash_count >= BLACK_SWAN_MAX:
+                            st.blacklist_until = float('inf')
+                            logger.critical(f"{symbol}: permanently blacklisted (3 crashes today).")
+                        else:
+                            st.blacklist_until = now_ts + BLACKLIST_TIMEOUT_S
+                            logger.warning(f"{symbol}: soft-banned for {BLACKLIST_TIMEOUT_S // 3600}h.")
+
+                        if st.position_amount > 0:
+                            await self._place_sell(symbol, st.position_amount, price, ticker, "FLASH CRASH EXIT")
+                            self._reset_position(symbol, cooldown=False)
+
+                        self.data_queue.task_done()
+                        continue
+
+                # Honour active ban
+                if st.blacklist_until > now_ts:
+                    self.data_queue.task_done()
+                    continue
+
+                # ════════════════════════════════════════════════════
+                #  RISK LAYER 2 — Global kill switch  (−15 % of wallet)
+                #  Closes all positions sorted worst-first, 30 s apart.
+                # ════════════════════════════════════════════════════
+                total_unrealized = sum(
+                    s.position_amount * s.raw_prices[-1] - s.total_invested
+                    for s in self.states.values()
+                    if s.total_invested > 0 and s.raw_prices
+                )
+                if (self.starting_balance > 0 and
+                        total_unrealized <= -(self.starting_balance * GLOBAL_KILL_PCT)):
+                    logger.critical(
+                        f"GLOBAL KILL SWITCH | unrealized PnL ${total_unrealized:.2f} | "
+                        f"halting bot and panic-selling (worst first)."
+                    )
+                    self.bot_halted = True
+                    asyncio.create_task(self._staggered_panic_sell())
+                    self.data_queue.task_done()
+                    continue
+
+                # ════════════════════════════════════════════════════
+                #  RISK LAYER 3 — Per-symbol stop-loss  (−8 % from avg entry)
+                # ════════════════════════════════════════════════════
+                if (st.dca_layer > 0 and st.avg_entry > 0 and
+                        price < st.avg_entry * (1 - PER_TRADE_STOP_PCT)):
+                    logger.warning(
+                        f"STOP-LOSS {symbol} | price {price:.4f} < "
+                        f"stop {st.avg_entry * (1 - PER_TRADE_STOP_PCT):.4f}"
+                    )
+                    await self._place_sell(symbol, st.position_amount, price, ticker, "STOP-LOSS")
+                    self._reset_position(symbol, cooldown=True)
+                    self.data_queue.task_done()
+                    continue
+
+                # ── Re-entry cooldown gate ────────────────────────────
+                if st.dca_layer == 0 and now_ts < st.reentry_until:
+                    self.data_queue.task_done()
+                    continue
+
+                # ── Need BB_PERIOD candles before we can trade ────────
+                if len(st.candles) < BB_PERIOD:
+                    self.data_queue.task_done()
+                    continue
+
+                grid = self._grid_spacing(symbol)
+
+                # ════════════════════════════════════════════════════
+                #  EXECUTION — Base order
+                #  Entry gates: concurrent cap · EMA trend · RSI oversold
+                # ════════════════════════════════════════════════════
+                if st.dca_layer == 0:
+                    if self._active_positions() >= MAX_CONCURRENT_POS:
+                        self.data_queue.task_done()
+                        continue
+                    if not self._passes_entry_gate(symbol):
+                        self.data_queue.task_done()
+                        continue
+
+                    await self._place_buy(symbol, BASE_ORDER, price, ticker, "Base Order")
+                    st.entry_grid = grid   # lock grid at entry for all TP maths
+
+                # ════════════════════════════════════════════════════
+                #  EXECUTION — DCA layers  (hard-capped at MAX_DCA_LAYERS)
+                #  DCA RSI gate: skip the 40–60 neutral zone
+                # ════════════════════════════════════════════════════
+                elif (st.tp1_done is False and
+                      price < st.last_buy_price * (1 - grid)):
+                    if st.dca_layer >= MAX_DCA_LAYERS:
+                        logger.warning(f"{symbol}: DCA cap ({MAX_DCA_LAYERS}) reached — holding.")
+                    elif self._passes_dca_gate(symbol):
+                        n = st.dca_layer
+                        amount_fiat = BASE_ORDER * (VOLUME_MULTIPLIER ** n)
+                        await self._place_buy(symbol, amount_fiat, price, ticker, f"DCA Layer {n + 1}")
+
+                # ════════════════════════════════════════════════════
+                #  EXECUTION — Take-profit tranches
+                #
+                #  Tranche 1 (40 %) — 1× grid above avg entry
+                #  Tranche 2 (35 %) — 2× grid above avg entry
+                #  Tranche 3 (25 %) — trailing stop: 0.8× grid below trail_high
+                #
+                #  entry_grid is used (not live grid) so targets don't shift
+                #  mid-position if volatility changes after entry.
+                # ════════════════════════════════════════════════════
+                elif st.dca_layer > 0 and st.avg_entry > 0:
+                    g = st.entry_grid
+
+                    if not st.tp1_done and price >= st.avg_entry * (1 + g):
+                        sell_amt = st.position_amount * TP_TRANCHE_1_PCT
+                        await self._place_sell(symbol, sell_amt, price, ticker, "TP1 — 40%")
+                        st.tp1_done   = True
+                        st.trail_high = price
+
+                    elif st.tp1_done and not st.tp2_done and price >= st.avg_entry * (1 + 2 * g):
+                        sell_amt = st.position_amount * TP_TRANCHE_2_PCT
+                        await self._place_sell(symbol, sell_amt, price, ticker, "TP2 — 35%")
+                        st.tp2_done   = True
+                        st.trail_high = max(st.trail_high, price)
+
+                    elif st.tp2_done and st.position_amount > 0:
+                        st.trail_high = max(st.trail_high, price)
+                        trail_stop    = st.trail_high * (1 - 0.8 * g)
+                        if price <= trail_stop:
+                            await self._place_sell(symbol, st.position_amount, price, ticker, "TP3 — trailing stop 25%")
+                            self._reset_position(symbol, cooldown=True)
+                            logger.info(f"{symbol}: full cycle complete.")
+
+                self.data_queue.task_done()
+
+            except asyncio.TimeoutError:
+                continue
+            except asyncio.CancelledError:
+                break
+            except Exception as e:
+                logger.error(f"Strategy error: {e}")
+
+        logger.info("Strategy Engine stopped gracefully.")

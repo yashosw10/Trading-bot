@@ -1,0 +1,291 @@
+@import "tailwindcss";
+
+/* ===================================================================
+   PaperMarketCap — Glass UI Design System
+   A trading terminal wrapped in light, refractive glass. Panels
+   behave like real glass: a bright edge where light hits, a soft
+   falloff where it doesn't, and an ambient tint borrowed from
+   whatever data they're showing (profit = green glow, loss = red).
+   =================================================================== */
+
+:root {
+  /* Brand */
+  --cyan:           #00b4d8;
+  --cyan-deep:      #0077a8;
+  --violet:         #8b5cf6;
+  --amber:          #f59e0b;
+  --amber-deep:     #b45309;
+
+  /* Semantic */
+  --green:          #059669;
+  --green-glow:     rgba(5, 150, 105, 0.18);
+  --red:            #dc2626;
+  --red-glow:       rgba(220, 38, 38, 0.18);
+
+  /* Text */
+  --text-primary:   #0f172a;
+  --text-secondary: #3f4a5e;
+  --text-muted:     #6b7688;
+
+  /* Glass surface tokens */
+  --glass-bg:        linear-gradient(155deg, rgba(255, 255, 255, 0.62) 0%, rgba(255, 255, 255, 0.22) 100%);
+  --glass-bg-strong: linear-gradient(155deg, rgba(255, 255, 255, 0.8) 0%, rgba(255, 255, 255, 0.35) 100%);
+  --glass-border:    rgba(255, 255, 255, 0.55);
+  --glass-edge-hi:   rgba(255, 255, 255, 0.9);
+  --glass-edge-lo:   rgba(255, 255, 255, 0.15);
+}
+
+* { box-sizing: border-box; margin: 0; padding: 0; }
+
+html, body {
+  background-color: #eef2f7;
+  color: var(--text-primary);
+  -webkit-font-smoothing: antialiased;
+  overflow-x: hidden;
+  min-height: 100vh;
+  /* Tabular numerals everywhere a price or balance might render */
+  font-feature-settings: "tnum" 1, "cv05" 1;
+}
+
+/* ---------------------------------------------------------------
+   1. Aurora backdrop — distinct color orbs, the surface the glass
+   actually refracts. Glass without a vivid backdrop just looks grey.
+   --------------------------------------------------------------- */
+.vibrant-background {
+  position: fixed;
+  inset: 0;
+  width: 100vw;
+  height: 100vh;
+  z-index: -1;
+  background-color: #eef2f7;
+  background-image:
+    radial-gradient(circle at 12% 25%, rgba(0, 180, 216, 0.42) 0%, rgba(0, 180, 216, 0) 32%),
+    radial-gradient(circle at 38% 78%, rgba(139, 92, 246, 0.32) 0%, rgba(139, 92, 246, 0) 35%),
+    radial-gradient(circle at 80% 15%, rgba(245, 158, 11, 0.30) 0%, rgba(245, 158, 11, 0) 32%),
+    radial-gradient(circle at 88% 80%, rgba(5, 150, 105, 0.26) 0%, rgba(5, 150, 105, 0) 30%);
+  filter: blur(40px);
+  pointer-events: none;
+}
+
+/* ---------------------------------------------------------------
+   2. Core glass panel — the signature element. Inset highlights on
+   the top-left edge and a dim shadow on bottom-right mimic how
+   light actually catches a glass pane's beveled edge.
+   --------------------------------------------------------------- */
+.glass-panel {
+  background: var(--glass-bg);
+  backdrop-filter: blur(20px) saturate(160%);
+  -webkit-backdrop-filter: blur(20px) saturate(160%);
+  border: 1px solid var(--glass-border);
+  border-radius: 20px;
+  box-shadow:
+    0 8px 32px 0 rgba(15, 23, 42, 0.10),
+    inset 1px 1px 1px var(--glass-edge-hi),
+    inset -1px -1px 1px var(--glass-edge-lo);
+  position: relative;
+  z-index: 10;
+  transition: transform 0.25s cubic-bezier(0.4, 0, 0.2, 1), box-shadow 0.25s ease, background 0.25s ease;
+}
+
+.glass-panel:hover {
+  transform: translateY(-3px);
+  background: var(--glass-bg-strong);
+  box-shadow:
+    0 14px 40px 0 rgba(15, 23, 42, 0.14),
+    inset 1px 1px 1px var(--glass-edge-hi),
+    inset -1px -1px 1px var(--glass-edge-lo);
+}
+
+/* Ambient data-tinted glow — used on profit/loss cards instead of a
+   purely decorative accent. The glass tints toward the number it holds. */
+.glass-panel.glow-green { box-shadow: 0 8px 32px var(--green-glow), inset 1px 1px 1px var(--glass-edge-hi), inset -1px -1px 1px var(--glass-edge-lo); }
+.glass-panel.glow-red   { box-shadow: 0 8px 32px var(--red-glow), inset 1px 1px 1px var(--glass-edge-hi), inset -1px -1px 1px var(--glass-edge-lo); }
+
+.glass-navbar {
+  background: linear-gradient(155deg, rgba(255, 255, 255, 0.55) 0%, rgba(255, 255, 255, 0.18) 100%);
+  backdrop-filter: blur(22px) saturate(160%);
+  -webkit-backdrop-filter: blur(22px) saturate(160%);
+  border-bottom: 1px solid var(--glass-border);
+  box-shadow: 0 4px 24px rgba(15, 23, 42, 0.06);
+  position: relative;
+  z-index: 50;
+}
+
+/* Accent rail — top border, used sparingly (left as utility, not
+   applied to every panel by default; see dashboard for usage) */
+.accent-cyan   { border-top: 3px solid var(--cyan); }
+.accent-amber  { border-top: 3px solid var(--amber-deep); }
+.accent-green  { border-top: 3px solid var(--green); }
+.accent-red    { border-top: 3px solid var(--red); }
+
+/* ---------------------------------------------------------------
+   3. Tables inside glass panels
+   --------------------------------------------------------------- */
+.glass-panel table { width: 100%; border-collapse: collapse; }
+.glass-panel thead tr {
+  background: rgba(255, 255, 255, 0.35);
+  border-bottom: 1px solid var(--glass-border);
+}
+.glass-panel th {
+  color: var(--text-secondary);
+  font-size: 0.72rem;
+  font-weight: 700;
+  letter-spacing: 0.08em;
+  text-transform: uppercase;
+  padding: 14px 20px;
+  text-align: left;
+}
+.glass-panel td {
+  padding: 15px 20px;
+  border-bottom: 1px solid rgba(15, 23, 42, 0.05);
+  color: var(--text-primary);
+  font-size: 0.85rem;
+}
+.glass-panel tbody tr:last-child td { border-bottom: none; }
+.table-row-hover:hover td {
+  background: rgba(255, 255, 255, 0.45);
+  transition: background 0.2s ease;
+}
+
+/* ---------------------------------------------------------------
+   4. Modal layer
+   --------------------------------------------------------------- */
+.modal-backdrop {
+  background: rgba(238, 242, 247, 0.45);
+  backdrop-filter: blur(10px);
+  z-index: 100;
+}
+
+/* ---------------------------------------------------------------
+   5. Buttons & form elements
+   --------------------------------------------------------------- */
+.btn-glass-primary {
+  background: linear-gradient(135deg, var(--cyan), var(--cyan-deep));
+  color: #ffffff;
+  font-weight: 700;
+  border: none;
+  border-radius: 12px;
+  cursor: pointer;
+  box-shadow: 0 4px 16px rgba(0, 180, 216, 0.32), inset 1px 1px 2px rgba(255, 255, 255, 0.4);
+  transition: transform 0.18s ease, box-shadow 0.18s ease;
+}
+.btn-glass-primary:hover {
+  transform: translateY(-2px);
+  box-shadow: 0 8px 22px rgba(0, 180, 216, 0.4), inset 1px 1px 2px rgba(255, 255, 255, 0.55);
+}
+.btn-glass-primary:active { transform: translateY(0); }
+
+.btn-glass-ghost {
+  background: rgba(255, 255, 255, 0.55);
+  border: 1px solid var(--glass-border);
+  color: var(--text-primary);
+  font-weight: 700;
+  border-radius: 12px;
+  cursor: pointer;
+  box-shadow: inset 1px 1px 2px rgba(255, 255, 255, 0.85);
+  transition: background 0.18s ease, transform 0.18s ease;
+}
+.btn-glass-ghost:hover { background: rgba(255, 255, 255, 0.85); transform: translateY(-1px); }
+
+.glass-input {
+  width: 100%;
+  border-radius: 12px;
+  border: 1px solid var(--glass-border);
+  background: rgba(255, 255, 255, 0.55);
+  color: var(--text-primary);
+  font-size: 0.9rem;
+  outline: none;
+  box-shadow: inset 0 2px 4px rgba(15, 23, 42, 0.03);
+  transition: border-color 0.18s ease, background 0.18s ease;
+  padding: 12px 14px;
+}
+.glass-input:focus {
+  border-color: var(--cyan);
+  background: rgba(255, 255, 255, 0.78);
+}
+.glass-input::placeholder { color: var(--text-muted); }
+
+.glass-select {
+  background: rgba(255, 255, 255, 0.5);
+  border: 1px solid var(--glass-border);
+  color: var(--text-primary);
+  border-radius: 12px;
+  font-size: 0.85rem;
+  font-weight: 700;
+  outline: none;
+  cursor: pointer;
+  padding: 7px 12px;
+  backdrop-filter: blur(8px);
+  -webkit-backdrop-filter: blur(8px);
+  box-shadow: inset 1px 1px 2px rgba(255, 255, 255, 0.85);
+}
+.glass-select option { background: #ffffff; color: #0f172a; }
+
+/* ---------------------------------------------------------------
+   6. Badges
+   --------------------------------------------------------------- */
+.badge-buy {
+  background: rgba(5, 150, 105, 0.13);
+  color: var(--green);
+  border: 1px solid rgba(5, 150, 105, 0.28);
+  border-radius: 8px;
+  font-size: 0.68rem;
+  font-weight: 800;
+  letter-spacing: 0.04em;
+  padding: 4px 10px;
+  display: inline-block;
+}
+.badge-sell {
+  background: rgba(220, 38, 38, 0.13);
+  color: var(--red);
+  border: 1px solid rgba(220, 38, 38, 0.28);
+  border-radius: 8px;
+  font-size: 0.68rem;
+  font-weight: 800;
+  letter-spacing: 0.04em;
+  padding: 4px 10px;
+  display: inline-block;
+}
+
+/* ---------------------------------------------------------------
+   7. Accessibility & fallback for browsers without backdrop-filter
+   --------------------------------------------------------------- */
+@supports not (backdrop-filter: blur(1px)) {
+  .vibrant-background { display: none; }
+  .glass-panel, .glass-navbar {
+    background: rgb(255, 255, 255);
+    border: 1px solid #e2e8f0;
+  }
+}
+
+@media (prefers-reduced-motion: reduce) {
+  .glass-panel, .btn-glass-primary, .btn-glass-ghost { transition: none; }
+  .float-up { animation: none; }
+}
+
+/* Visible keyboard focus on every interactive glass element */
+.glass-panel:focus-visible,
+.btn-glass-primary:focus-visible,
+.btn-glass-ghost:focus-visible,
+.glass-input:focus-visible,
+.glass-select:focus-visible {
+  outline: 2px solid var(--cyan);
+  outline-offset: 2px;
+}
+
+/* ---------------------------------------------------------------
+   8. Scrollbar
+   --------------------------------------------------------------- */
+::-webkit-scrollbar { width: 8px; height: 8px; }
+::-webkit-scrollbar-track { background: transparent; }
+::-webkit-scrollbar-thumb { background: rgba(15, 23, 42, 0.15); border-radius: 4px; }
+::-webkit-scrollbar-thumb:hover { background: rgba(15, 23, 42, 0.25); }
+
+/* ---------------------------------------------------------------
+   9. Motion
+   --------------------------------------------------------------- */
+@keyframes floatUp {
+  0%   { opacity: 0; transform: translateY(10px); }
+  100% { opacity: 1; transform: translateY(0); }
+}
+.float-up { animation: floatUp 0.45s cubic-bezier(0.16, 1, 0.3, 1); }
