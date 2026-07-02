@@ -1,16 +1,13 @@
 import type { Metadata } from "next";
 import { Inter } from "next/font/google";
 import "./globals.css";
+import QueryProvider from "@/providers/QueryProvider";
 
-const inter = Inter({
-  subsets: ["latin"],
-  weight: ["300", "400", "500", "600", "700", "800", "900"],
-  display: "swap",
-});
+const inter = Inter({ subsets: ["latin"] });
 
 export const metadata: Metadata = {
-  title: "PaperMarketCap — Crypto Paper Trading Bot",
-  description: "Algorithmic crypto paper trading dashboard powered by DCA Hybrid strategy",
+  title: "Trading Bot | Liquid Glass",
+  description: "Advanced algorithmic trading bot dashboard featuring Apple Liquid Glass aesthetic.",
 };
 
 export default function RootLayout({
@@ -19,13 +16,17 @@ export default function RootLayout({
   children: React.ReactNode;
 }>) {
   return (
-    <html lang="en" className={inter.className}>
-      <body className="min-h-full">
-        {/* Aurora orb backdrop — mounted once at the root so every route
-            sits on the same glass-refracting surface. Lives behind
-            everything (z-index: -1, see globals.css). */}
-        <div className="vibrant-background" aria-hidden="true" />
-        {children}
+    <html lang="en" className="dark">
+      <body className={`${inter.className} min-h-screen bg-neutral-50 dark:bg-black text-neutral-900 dark:text-neutral-50 antialiased selection:bg-blue-500/30`}>
+        {/* Background Ambient Glow */}
+        <div className="fixed inset-0 z-[-1] overflow-hidden pointer-events-none">
+          <div className="absolute top-[-20%] left-[-10%] w-[50%] h-[50%] bg-blue-500/10 dark:bg-blue-600/20 blur-[120px] rounded-full mix-blend-screen" />
+          <div className="absolute bottom-[-10%] right-[-10%] w-[40%] h-[60%] bg-purple-500/10 dark:bg-purple-600/10 blur-[120px] rounded-full mix-blend-screen" />
+        </div>
+        
+        <QueryProvider>
+          {children}
+        </QueryProvider>
       </body>
     </html>
   );
