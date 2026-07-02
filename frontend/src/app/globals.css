@@ -1,4 +1,5 @@
 @import "tailwindcss";
+@custom-variant dark (&:where(.dark, .dark *));
 
 @theme {
   --font-sans: "Inter", "SF Pro Display", -apple-system, BlinkMacSystemFont, "Segoe UI", Roboto, sans-serif;
@@ -18,17 +19,17 @@
     --bg-base: #f5f5f7;
     --text-primary: #1d1d1f;
     --text-secondary: #86868b;
-    --glass-panel: rgba(255, 255, 255, 0.65);
+    --glass-panel: rgba(255, 255, 255, 0.45);
     --glass-border: rgba(255, 255, 255, 0.4);
     --glass-highlight: rgba(255, 255, 255, 0.8);
-    --glass-shadow: 0 8px 32px 0 rgba(0, 0, 0, 0.04);
+    --glass-shadow: 0 8px 32px 0 rgba(0, 0, 0, 0.06);
   }
 
   .dark {
     --bg-base: #000000;
     --text-primary: #f5f5f7;
     --text-secondary: #86868b;
-    --glass-panel: rgba(28, 28, 30, 0.55);
+    --glass-panel: rgba(28, 28, 30, 0.45);
     --glass-border: rgba(255, 255, 255, 0.12);
     --glass-highlight: rgba(255, 255, 255, 0.08);
     --glass-shadow: 0 8px 32px 0 rgba(0, 0, 0, 0.4);
@@ -38,32 +39,60 @@
 body {
   background-color: var(--bg-base);
   color: var(--text-primary);
-  /* Fallback for background if the ambient glow doesn't render */
 }
 
 /* 
  * iOS 26 Liquid Glass Utilities 
- * Utilizes real backdrop blur, specular highlights, and translucent layers
  */
 
 .liquid-glass {
   background: var(--glass-panel);
-  backdrop-filter: blur(24px) saturate(180%);
-  -webkit-backdrop-filter: blur(24px) saturate(180%);
+  backdrop-filter: blur(28px) saturate(200%);
+  -webkit-backdrop-filter: blur(28px) saturate(200%);
   border: 1px solid var(--glass-border);
   box-shadow: var(--glass-shadow), inset 0 1px 1px var(--glass-highlight);
-  border-radius: 24px; /* Soft Apple rounding */
+  border-radius: 24px;
   transition: all 0.3s cubic-bezier(0.25, 1, 0.5, 1);
 }
 
+/* Hide scrollbar globally but maintain scroll functionality */
+::-webkit-scrollbar {
+  display: none;
+}
+
+* {
+  -ms-overflow-style: none;  /* IE and Edge */
+  scrollbar-width: none;  /* Firefox */
+}
+
 .liquid-glass-card {
+  position: relative;
   background: var(--glass-panel);
-  backdrop-filter: blur(24px) saturate(180%);
-  -webkit-backdrop-filter: blur(24px) saturate(180%);
+  backdrop-filter: blur(32px) saturate(200%);
+  -webkit-backdrop-filter: blur(32px) saturate(200%);
   border: 1px solid var(--glass-border);
   box-shadow: var(--glass-shadow), inset 0 1px 1px var(--glass-highlight);
   border-radius: 28px;
-  transition: all 0.3s cubic-bezier(0.25, 1, 0.5, 1);
+  transition: all 0.4s cubic-bezier(0.25, 1, 0.5, 1);
+  overflow: hidden;
+}
+
+/* Specular highlight border effect for cards */
+.liquid-glass-card::before {
+  content: '';
+  position: absolute;
+  inset: 0;
+  border-radius: inherit;
+  padding: 1px;
+  background: linear-gradient(135deg, rgba(255,255,255,0.5) 0%, rgba(255,255,255,0) 40%, rgba(255,255,255,0) 60%, rgba(255,255,255,0.1) 100%);
+  -webkit-mask: linear-gradient(#fff 0 0) content-box, linear-gradient(#fff 0 0);
+  -webkit-mask-composite: xor;
+  mask-composite: exclude;
+  pointer-events: none;
+}
+
+.dark .liquid-glass-card::before {
+  background: linear-gradient(135deg, rgba(255,255,255,0.2) 0%, rgba(255,255,255,0) 40%, rgba(255,255,255,0) 60%, rgba(255,255,255,0.05) 100%);
 }
 
 .liquid-glass-button {
@@ -78,6 +107,33 @@ body {
 
 .liquid-glass-button:active {
   transform: scale(0.96);
+}
+
+/* Background Animations */
+@keyframes blob1 {
+  0%, 100% { transform: translate(0px, 0px) scale(1); }
+  33% { transform: translate(30px, -50px) scale(1.1); }
+  66% { transform: translate(-20px, 20px) scale(0.9); }
+}
+
+@keyframes blob2 {
+  0%, 100% { transform: translate(0px, 0px) scale(1); }
+  33% { transform: translate(-30px, 50px) scale(0.9); }
+  66% { transform: translate(20px, -20px) scale(1.1); }
+}
+
+@keyframes blob3 {
+  0%, 100% { transform: translate(0px, 0px) scale(1); }
+  33% { transform: translate(50px, 30px) scale(1.05); }
+  66% { transform: translate(-30px, -30px) scale(0.95); }
+}
+
+.animate-blob1 { animation: blob1 15s infinite alternate ease-in-out; }
+.animate-blob2 { animation: blob2 18s infinite alternate-reverse ease-in-out; }
+.animate-blob3 { animation: blob3 20s infinite alternate ease-in-out; }
+
+.bg-noise {
+  background-image: url("data:image/svg+xml,%3Csvg viewBox='0 0 200 200' xmlns='http://www.w3.org/2000/svg'%3E%3Cfilter id='noiseFilter'%3E%3CfeTurbulence type='fractalNoise' baseFrequency='0.65' numOctaves='3' stitchTiles='stitch'/%3E%3C/filter%3E%3Crect width='100%25' height='100%25' filter='url(%23noiseFilter)'/%3E%3C/svg%3E");
 }
 
 /* Subtle Shimmer for Skeletons */
@@ -95,13 +151,4 @@ body {
   );
   background-size: 1000px 100%;
   animation: shimmer 2s infinite linear;
-}
-
-.dark .glass-skeleton {
-  background: linear-gradient(
-    90deg,
-    rgba(255, 255, 255, 0) 0%,
-    rgba(255, 255, 255, 0.05) 50%,
-    rgba(255, 255, 255, 0) 100%
-  );
 }

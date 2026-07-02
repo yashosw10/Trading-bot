@@ -1,13 +1,20 @@
 "use client";
 
-import { Bell, Search, Menu, RefreshCw } from "lucide-react";
+import { Bell, Search, Menu, RefreshCw, Sun, Moon } from "lucide-react";
 import { useQueryClient } from "@tanstack/react-query";
-import { useState } from "react";
+import { useState, useEffect } from "react";
+import { useTheme } from "next-themes";
 import { QUERY_KEYS } from "@/lib/queryKeys";
 
 export default function TopNav() {
   const queryClient = useQueryClient();
   const [isRefreshing, setIsRefreshing] = useState(false);
+  const { theme, setTheme } = useTheme();
+  const [mounted, setMounted] = useState(false);
+
+  useEffect(() => {
+    setMounted(true);
+  }, []);
 
   const handleManualRefresh = async () => {
     setIsRefreshing(true);
@@ -46,6 +53,16 @@ export default function TopNav() {
         >
           <RefreshCw className={`w-5 h-5 ${isRefreshing ? "animate-spin" : ""}`} />
         </button>
+
+        {mounted && (
+          <button 
+            onClick={() => setTheme(theme === "dark" ? "light" : "dark")}
+            className="p-2.5 rounded-xl liquid-glass-button text-neutral-600 dark:text-neutral-300"
+            title="Toggle Theme"
+          >
+            {theme === "dark" ? <Sun className="w-5 h-5" /> : <Moon className="w-5 h-5" />}
+          </button>
+        )}
         
         <button className="p-2.5 rounded-xl liquid-glass-button text-neutral-600 dark:text-neutral-300">
           <Bell className="w-5 h-5" />
