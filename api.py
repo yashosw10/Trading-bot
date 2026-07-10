@@ -1,4 +1,5 @@
 import asyncio
+from datetime import datetime, timezone
 from fastapi import FastAPI, WebSocket, WebSocketDisconnect
 from fastapi.middleware.cors import CORSMiddleware
 from contextlib import asynccontextmanager
@@ -115,10 +116,16 @@ async def get_balances():
     eur = await database.get_balance("EUR")
     return {"USD": usd, "INR": inr, "EUR": eur}
 
+SYMBOLS = ["BTC/USDT", "ETH/USDT", "BNB/USDT", "SOL/USDT", "XRP/USDT"]
+
 @app.get("/api/positions")
 async def get_positions():
-    pos = await database.get_position("BTC/USDT")
-    return {"BTC/USDT": pos}
+    positions = {}
+    for symbol in SYMBOLS:
+        pos = await database.get_position(symbol)
+        if pos and pos.get("amount", 0) > 0:
+            positions[symbol] = pos
+    return positions
 
 @app.get("/api/total-profit")
 async def api_get_total_profit(currency: str = "USD"):
@@ -340,22 +347,11 @@ async def manual_order(order: OrderRequest):
     
     # Paper execution
     # Fetch current price from latest ticker or fallback to 0 (which would fail trade)
-    import aiosqlite
-    from streamer import fetch_coindcx_ticker
+    from utils import fetch_current_price
     
-    # Mocking fetching price for manual order
     price_usd = 0.0
     try:
-        import httpx
-        async with httpx.AsyncClient() as client:
-            resp = await client.get("https://api.coindcx.com/exchange/ticker")
-            data = resp.json()
-            # Find the BTCUSDT market (since we use BTC/USDT)
-            target = order.symbol.replace('/', '')
-            for m in data:
-                if m.get('market') == target:
-                    price_usd = float(m.get('last_price', 0))
-                    break
+        price_usd = await fetch_current_price(order.symbol)
     except Exception as e:
         logger.error(f"Failed to fetch live price for manual order: {e}")
         

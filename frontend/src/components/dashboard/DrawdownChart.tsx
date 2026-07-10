@@ -92,7 +92,7 @@ export default function DrawdownChart() {
                   color: '#fff'
                 }}
                 itemStyle={{ color: '#fff', fontWeight: 'bold' }}
-                formatter={(value: number) => [`${value}%`, 'Drawdown']}
+                formatter={(value: any) => [`${value}%`, 'Drawdown']}
               />
               <Area 
                 type="monotone" 

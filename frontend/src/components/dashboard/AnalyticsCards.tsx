@@ -34,7 +34,10 @@ export default function AnalyticsCards() {
     const rr = avgLoss === 0 ? (avgWin > 0 ? Infinity : 0) : avgWin / avgLoss;
 
     // Build equity curve and group by day for Sharpe
-    const equityCurve = [];
+    interface EquityPoint {
+      balance: number;
+    }
+    const equityCurve: EquityPoint[] = [];
     let currentBalance = INITIAL_BALANCE;
     const dailyBalances: Record<string, number[]> = {};
 

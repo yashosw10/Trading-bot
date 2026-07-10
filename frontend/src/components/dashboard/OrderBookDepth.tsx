@@ -13,6 +13,8 @@ const OrderBookDepthComponent = ({ symbol = "BTC/USDT" }: { symbol?: string }) =
   const lastUpdateRef = useRef(0);
 
   useEffect(() => {
+    setBids([]);
+    setAsks([]);
     const ws = new WebSocket(WS_URL);
     
     ws.onopen = () => {

@@ -7,6 +7,7 @@ class TickerData(BaseModel):
     price_inr: float
     price_eur: float
     price_change_percent: float = 0.0
+    sparkline: list[float] = []
     timestamp: datetime
 
 class TradeSignal(BaseModel):

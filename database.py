@@ -167,75 +167,89 @@ async def get_position(symbol: str) -> dict:
 
 async def execute_trade(symbol: str, side: str, fiat_currency: str, amount: float, price: float, fee: float, pnl_fiat: float = 0.0, pnl_percent: float = 0.0, mfe: float = 0.0, mae: float = 0.0):
     total_cost = (amount * price) + fee if side == 'buy' else (amount * price) - fee
+    usd_to_inr = 83.0
+    usd_to_eur = 0.92
     
     async with aiosqlite.connect(DB_FILE) as db:
-        if side == 'buy':
-            async with db.execute('SELECT balance FROM wallet WHERE currency = ?', (fiat_currency,)) as cursor:
-                row = await cursor.fetchone()
-                balance = row[0] if row else 0.0
-            if balance < total_cost:
-                logger.warning(f"Insufficient {fiat_currency} balance for {side} {amount} {symbol}")
-                return False
-        
-        if side == 'sell':
-            async with db.execute('SELECT amount FROM positions WHERE symbol = ?', (symbol,)) as cursor:
-                row = await cursor.fetchone()
-                pos_amount = row[0] if row else 0.0
-            if pos_amount < amount:
-                logger.warning(f"Insufficient {symbol} amount for {side}")
-                return False
-
-        if side == 'buy':
-            await db.execute('UPDATE wallet SET balance = balance - ? WHERE currency = ?', (total_cost, fiat_currency))
-        else:
-            await db.execute('UPDATE wallet SET balance = balance + ? WHERE currency = ?', (total_cost, fiat_currency))
-
-        pos = await get_position(symbol)
-        new_amount = 0.0
-        avg_usd, avg_inr, avg_eur = 0.0, 0.0, 0.0
-        
-        if pos:
-            current_amount = pos['amount']
-            avg_usd, avg_inr, avg_eur = pos['average_price_usd'], pos['average_price_inr'], pos['average_price_eur']
-            
+        async with db.execute("BEGIN IMMEDIATE"):
             if side == 'buy':
-                new_amount = current_amount + amount
-                new_avg = ((current_amount * pos[f'average_price_{fiat_currency.lower()}']) + (amount * price)) / new_amount
-                if fiat_currency == 'USD': avg_usd = new_avg
-                elif fiat_currency == 'INR': avg_inr = new_avg
-                elif fiat_currency == 'EUR': avg_eur = new_avg
+                async with db.execute('SELECT balance FROM wallet WHERE currency = ?', (fiat_currency,)) as cursor:
+                    row = await cursor.fetchone()
+                    balance = row[0] if row else 0.0
+                if balance < total_cost:
+                    logger.warning(f"Insufficient {fiat_currency} balance for {side} {amount} {symbol}")
+                    await db.rollback()
+                    return False
+            
+            if side == 'sell':
+                async with db.execute('SELECT amount FROM positions WHERE symbol = ?', (symbol,)) as cursor:
+                    row = await cursor.fetchone()
+                    pos_amount = row[0] if row else 0.0
+                if pos_amount < amount:
+                    logger.warning(f"Insufficient {symbol} amount for {side}")
+                    await db.rollback()
+                    return False
+
+            if side == 'buy':
+                await db.execute('UPDATE wallet SET balance = balance - ? WHERE currency = ?', (total_cost, fiat_currency))
             else:
-                new_amount = current_amount - amount
-                if new_amount <= 0.000001:  
-                    new_amount, avg_usd, avg_inr, avg_eur = 0.0, 0.0, 0.0, 0.0
-            
-            await db.execute('''
-                UPDATE positions 
-                SET amount = ?, average_price_usd = ?, average_price_inr = ?, average_price_eur = ? 
-                WHERE symbol = ?
-            ''', (new_amount, avg_usd, avg_inr, avg_eur, symbol))
-        else:
-            if side == 'buy':
-                new_amount = amount
-                if fiat_currency == 'USD': avg_usd = price
-                elif fiat_currency == 'INR': avg_inr = price
-                elif fiat_currency == 'EUR': avg_eur = price
-                await db.execute('''
-                    INSERT INTO positions (symbol, amount, average_price_usd, average_price_inr, average_price_eur)
-                    VALUES (?, ?, ?, ?, ?)
-                ''', (symbol, new_amount, avg_usd, avg_inr, avg_eur))
+                await db.execute('UPDATE wallet SET balance = balance + ? WHERE currency = ?', (total_cost, fiat_currency))
 
-        await db.execute('''
-            INSERT INTO trades (symbol, side, fiat_currency, amount, price, fee, pnl_fiat, pnl_percent, mfe, mae)
-            VALUES (?, ?, ?, ?, ?, ?, ?, ?, ?, ?)
-        ''', (symbol, side, fiat_currency, amount, price, fee, pnl_fiat, pnl_percent, mfe, mae))
-        
-        await db.commit()
-        return True
+            async with db.execute('SELECT amount, average_price_usd, average_price_inr, average_price_eur FROM positions WHERE symbol = ?', (symbol,)) as cursor:
+                pos = await cursor.fetchone()
+
+            new_amount = 0.0
+            avg_usd, avg_inr, avg_eur = 0.0, 0.0, 0.0
+            
+            # Derive standard USD price for the transaction to anchor calculations
+            price_usd = price
+            if fiat_currency == 'INR':
+                price_usd = price / usd_to_inr
+            elif fiat_currency == 'EUR':
+                price_usd = price / usd_to_eur
+
+            if pos:
+                current_amount, pos_avg_usd = pos[0], pos[1]
+                
+                if side == 'buy':
+                    new_amount = current_amount + amount
+                    avg_usd = ((current_amount * pos_avg_usd) + (amount * price_usd)) / new_amount
+                    avg_inr = avg_usd * usd_to_inr
+                    avg_eur = avg_usd * usd_to_eur
+                else:
+                    new_amount = current_amount - amount
+                    if new_amount <= 0.000001:  
+                        new_amount, avg_usd, avg_inr, avg_eur = 0.0, 0.0, 0.0, 0.0
+                    else:
+                        avg_usd, avg_inr, avg_eur = pos[1], pos[2], pos[3]
+                
+                await db.execute('''
+                    UPDATE positions 
+                    SET amount = ?, average_price_usd = ?, average_price_inr = ?, average_price_eur = ? 
+                    WHERE symbol = ?
+                ''', (new_amount, avg_usd, avg_inr, avg_eur, symbol))
+            else:
+                if side == 'buy':
+                    new_amount = amount
+                    avg_usd = price_usd
+                    avg_inr = avg_usd * usd_to_inr
+                    avg_eur = avg_usd * usd_to_eur
+                    await db.execute('''
+                        INSERT INTO positions (symbol, amount, average_price_usd, average_price_inr, average_price_eur)
+                        VALUES (?, ?, ?, ?, ?)
+                    ''', (symbol, new_amount, avg_usd, avg_inr, avg_eur))
+
+            await db.execute('''
+                INSERT INTO trades (symbol, side, fiat_currency, amount, price, fee, pnl_fiat, pnl_percent, mfe, mae)
+                VALUES (?, ?, ?, ?, ?, ?, ?, ?, ?, ?)
+            ''', (symbol, side, fiat_currency, amount, price, fee, pnl_fiat, pnl_percent, mfe, mae))
+            
+            await db.commit()
+            return True
 
 async def get_bot_config() -> dict:
     async with aiosqlite.connect(DB_FILE) as db:
-        async with db.execute('SELECT daily_loss_limit, max_drawdown_pct, max_position_size, max_open_positions, mode, is_paused, updated_at FROM bot_config WHERE id = 1') as cursor:
+        async with db.execute('SELECT daily_loss_limit, max_drawdown_pct, max_position_size, max_open_positions, mode, is_paused, telegram_bot_token, telegram_chat_id, updated_at FROM bot_config WHERE id = 1') as cursor:
             row = await cursor.fetchone()
             if row:
                 return {
@@ -245,7 +259,9 @@ async def get_bot_config() -> dict:
                     "max_open_positions": row[3],
                     "mode": row[4],
                     "is_paused": bool(row[5]),
-                    "updated_at": row[6]
+                    "telegram_bot_token": row[6],
+                    "telegram_chat_id": row[7],
+                    "updated_at": row[8]
                 }
             return {}
 
@@ -254,7 +270,7 @@ async def update_bot_config(config: dict) -> bool:
         set_clauses = []
         values = []
         for k, v in config.items():
-            if k in ['daily_loss_limit', 'max_drawdown_pct', 'max_position_size', 'max_open_positions', 'mode', 'is_paused']:
+            if k in ['daily_loss_limit', 'max_drawdown_pct', 'max_position_size', 'max_open_positions', 'mode', 'is_paused', 'telegram_bot_token', 'telegram_chat_id']:
                 set_clauses.append(f"{k} = ?")
                 values.append(v)
         if not set_clauses:

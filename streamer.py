@@ -14,6 +14,9 @@ class Streamer:
         self.rest_url = "https://api.coindcx.com/exchange/ticker"
         self.top_5_markets = {'BTCUSDT', 'ETHUSDT', 'SOLUSDT', 'BNBUSDT', 'XRPUSDT'}
         
+        from collections import defaultdict
+        self.price_history = defaultdict(list)
+        
         self.usd_to_inr = 83.0
         self.usd_to_eur = 0.92
 
@@ -43,12 +46,16 @@ class Streamer:
                             price_eur = price_usd * self.usd_to_eur
                             price_change_percent = float(market.get('change_24_hour', 0) or 0)
                             
+                            self.price_history[formatted_symbol].append(price_usd)
+                            self.price_history[formatted_symbol] = self.price_history[formatted_symbol][-24:]
+                            
                             ticker_data = TickerData(
                                 symbol=formatted_symbol,
                                 price_usd=price_usd,
                                 price_inr=price_inr,
                                 price_eur=price_eur,
                                 price_change_percent=price_change_percent,
+                                sparkline=self.price_history[formatted_symbol],
                                 timestamp=datetime.now(timezone.utc)
                             )
                             
@@ -78,12 +85,16 @@ class Streamer:
                         price_eur = price_usd * self.usd_to_eur
                         price_change_percent = float(market['change_24_hour'])
                         
+                        self.price_history[formatted_symbol].append(price_usd)
+                        self.price_history[formatted_symbol] = self.price_history[formatted_symbol][-24:]
+                        
                         ticker_data = TickerData(
                             symbol=formatted_symbol,
                             price_usd=price_usd,
                             price_inr=price_inr,
                             price_eur=price_eur,
                             price_change_percent=price_change_percent,
+                            sparkline=self.price_history[formatted_symbol],
                             timestamp=datetime.now(timezone.utc)
                         )
                         

@@ -1,6 +1,6 @@
 "use client";
 
-import { useState } from "react";
+import { useState, useEffect } from "react";
 import DashboardLayout from "@/components/layout/DashboardLayout";
 import PortfolioSummary from "@/components/dashboard/PortfolioSummary";
 import ActivePositions from "@/components/dashboard/ActivePositions";
@@ -8,12 +8,26 @@ import RecentTrades from "@/components/dashboard/RecentTrades";
 import FundManagement from "@/components/dashboard/FundManagement";
 import OhlcvChart from "@/components/dashboard/OhlcvChart";
 import OrderBookDepth from "@/components/dashboard/OrderBookDepth";
+import MarketOverview from "@/components/dashboard/MarketOverview";
 import FeedHealthPanel from "@/components/dashboard/FeedHealthPanel";
 import ManualOrder from "@/components/dashboard/ManualOrder";
 import type { Currency } from "@/types/api";
 
 export default function Home() {
   const [currencyPref, setCurrencyPref] = useState<Currency>("USD");
+  const [activeCoin, setActiveCoin] = useState("BTC/USDT");
+
+  useEffect(() => {
+    const saved = sessionStorage.getItem("activeCoin");
+    if (saved) setActiveCoin(saved);
+  }, []);
+
+  const handleSetCoin = (coin: string) => {
+    setActiveCoin(coin);
+    sessionStorage.setItem("activeCoin", coin);
+  };
+
+  const COINS = ["BTC/USDT", "ETH/USDT", "BNB/USDT", "SOL/USDT", "XRP/USDT"];
 
   return (
     <DashboardLayout>
@@ -43,15 +57,37 @@ export default function Home() {
         </div>
       </div>
 
-      <div className="grid grid-cols-1 lg:grid-cols-3 gap-6">
-        {/* Left Column: Metrics & Charts */}
-        <div className="lg:col-span-2 space-y-6">
+      <div className="grid grid-cols-1 xl:grid-cols-4 gap-6">
+        {/* Left Sidebar: Markets & Health */}
+        <div className="space-y-6">
+          <MarketOverview activeCoin={activeCoin} onSelect={handleSetCoin} />
           <FeedHealthPanel />
+        </div>
+
+        {/* Main Column: Charts & Data */}
+        <div className="xl:col-span-2 space-y-6">
           <PortfolioSummary currency={currencyPref} />
           
-          <OhlcvChart activeCoin="BTC/USDT" />
+          <div>
+            <div className="flex gap-2 mb-3 overflow-x-auto pb-1 no-scrollbar">
+              {COINS.map(coin => (
+                <button
+                  key={coin}
+                  onClick={() => handleSetCoin(coin)}
+                  className={`px-3 py-1.5 rounded-lg text-sm font-medium transition-colors whitespace-nowrap
+                    ${activeCoin === coin 
+                      ? 'bg-blue-500 text-white shadow-[0_0_10px_rgba(59,130,246,0.3)]' 
+                      : 'bg-black/5 dark:bg-white/5 text-neutral-500 hover:bg-black/10 dark:hover:bg-white/10'}`}
+                >
+                  {coin.replace("/USDT", "")}
+                </button>
+              ))}
+            </div>
+            
+            <OhlcvChart activeCoin={activeCoin} />
+          </div>
 
-          <OrderBookDepth symbol="BTC/USDT" />
+          <OrderBookDepth symbol={activeCoin} />
 
           <ActivePositions />
           

@@ -24,3 +24,11 @@ async def send_telegram_alert(msg: str):
                 logger.error(f"Telegram alert failed: {resp.text}")
     except Exception as e:
         logger.error(f"Error sending telegram alert: {e}")
+
+async def fetch_current_price(symbol: str) -> float:
+    async with httpx.AsyncClient(timeout=5.0) as client:
+        r = await client.get(
+            "https://api.coindcx.com/exchange/ticker",
+            params={"market": symbol.replace('/', '')}
+        )
+        return float(r.json()[0]["last_price"])
