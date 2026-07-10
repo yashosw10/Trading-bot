@@ -6,7 +6,10 @@ import PortfolioSummary from "@/components/dashboard/PortfolioSummary";
 import ActivePositions from "@/components/dashboard/ActivePositions";
 import RecentTrades from "@/components/dashboard/RecentTrades";
 import FundManagement from "@/components/dashboard/FundManagement";
-import PerformanceChart from "@/components/dashboard/PerformanceChart";
+import OhlcvChart from "@/components/dashboard/OhlcvChart";
+import OrderBookDepth from "@/components/dashboard/OrderBookDepth";
+import FeedHealthPanel from "@/components/dashboard/FeedHealthPanel";
+import ManualOrder from "@/components/dashboard/ManualOrder";
 import type { Currency } from "@/types/api";
 
 export default function Home() {
@@ -43,9 +46,12 @@ export default function Home() {
       <div className="grid grid-cols-1 lg:grid-cols-3 gap-6">
         {/* Left Column: Metrics & Charts */}
         <div className="lg:col-span-2 space-y-6">
+          <FeedHealthPanel />
           <PortfolioSummary currency={currencyPref} />
           
-          <PerformanceChart />
+          <OhlcvChart activeCoin="BTC/USDT" />
+
+          <OrderBookDepth symbol="BTC/USDT" />
 
           <ActivePositions />
           
@@ -54,6 +60,7 @@ export default function Home() {
 
         {/* Right Column: Actions */}
         <div className="space-y-6">
+          <ManualOrder />
           <FundManagement defaultCurrency={currencyPref} />
         </div>
       </div>

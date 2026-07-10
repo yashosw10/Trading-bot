@@ -61,7 +61,9 @@ class OrderManager:
                     price=execution_price,
                     fee=fee,
                     pnl_fiat=pnl_fiat,
-                    pnl_percent=pnl_percent
+                    pnl_percent=pnl_percent,
+                    mfe=signal.mfe,
+                    mae=signal.mae
                 )
                 
                 if success:
@@ -78,9 +80,22 @@ class OrderManager:
                             "fiat_currency": signal.fiat_currency,
                             "pnl_fiat": pnl_fiat,
                             "pnl_percent": pnl_percent,
+                            "mfe": signal.mfe,
+                            "mae": signal.mae,
                             "timestamp": datetime.now(timezone.utc).isoformat()
                         }
                         asyncio.create_task(self.broadcast_cb(json.dumps(payload)))
+                        
+                        from utils import send_telegram_alert
+                        try:
+                            msg_side = "🟢 BUY" if signal.side == 'buy' else "🔴 SELL"
+                            pnl_str = f"\nPnL: ${pnl_fiat:+.2f}" if signal.side == 'sell' else ""
+                            asyncio.create_task(send_telegram_alert(
+                                f"<b>{msg_side} {signal.symbol}</b>\nPrice: ${execution_price:,.2f}\nQty: {signal.amount}{pnl_str}"
+                            ))
+                        except RuntimeError:
+                            # No event loop running — skip silently, never block trade execution
+                            pass
                 else:
                     logger.error("Trade failed (insufficient funds/asset).")
 

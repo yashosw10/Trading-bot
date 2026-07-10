@@ -7,6 +7,8 @@ export interface Trade {
   fee: number;
   pnl_fiat: number;
   pnl_percent: number;
+  mfe: number;
+  mae: number;
   timestamp: string;
 }
 

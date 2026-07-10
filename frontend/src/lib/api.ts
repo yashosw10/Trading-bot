@@ -4,10 +4,17 @@ import { PositionsResponse } from '../types/position';
 import { TradesResponse } from '../types/trade';
 import { AddFundsPayload, AddFundsResponse } from '../types/fund';
 
+export const WS_URL = "ws://127.0.0.1:8000/ws";
+
 const fetcher = async <T>(url: string, options?: RequestInit): Promise<T> => {
   const res = await fetch(url, options);
   if (!res.ok) {
-    throw new Error(`Error fetching ${url}: ${res.statusText}`);
+    let errorMsg = res.statusText;
+    try {
+      const errBody = await res.json();
+      errorMsg = errBody.detail || errBody.message || errorMsg;
+    } catch(e) {}
+    throw new Error(errorMsg);
   }
   return res.json();
 };
@@ -18,6 +25,14 @@ export const api = {
   getTotalProfit: (currency: string) => fetcher<TotalProfitResponse>(ENDPOINTS.TOTAL_PROFIT(currency)),
   getInvested: () => fetcher<InvestedResponse>(ENDPOINTS.INVESTED),
   getTrades: () => fetcher<TradesResponse>(ENDPOINTS.TRADES),
+  getOhlcv: (symbol: string = 'BTC/USDT', interval: string = '1h') => fetcher<any>(`/api/ohlcv?symbol=${symbol}&interval=${interval}`),
+  getIndicators: (symbol: string, type: string, interval: string) => fetcher<any>(`/api/indicators?symbol=${symbol}&type=${type}&interval=${interval}`),
+  getConfig: () => fetcher<any>('/api/config'),
+  updateConfig: (config: any) => fetcher<{status: string}>('/api/config', {
+    method: 'PUT',
+    body: JSON.stringify(config)
+  }),
+  killBot: () => fetcher<{status: string, message: string}>('/api/bot/kill', { method: 'POST' }),
   
   addFunds: (payload: AddFundsPayload) => fetcher<AddFundsResponse>(ENDPOINTS.ADD_FUNDS, {
     method: 'POST',
@@ -25,5 +40,16 @@ export const api = {
       'Content-Type': 'application/json'
     },
     body: JSON.stringify(payload)
+  }),
+  getLatestBacktest: () => fetcher<any>('/api/backtest/latest'),
+  placeOrder: (payload: { symbol: string; side: string; amount: number; type?: string }) => fetcher<any>('/api/orders', {
+    method: 'POST',
+    headers: {
+      'Content-Type': 'application/json'
+    },
+    body: JSON.stringify(payload)
+  }),
+  testTelegram: () => fetcher<{status: string; message: string}>('/api/bot/test-telegram', {
+    method: 'POST'
   })
 };

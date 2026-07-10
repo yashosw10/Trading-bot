@@ -1,6 +1,6 @@
 "use client";
 
-import { Activity, LayoutDashboard, Settings, History, Wallet } from "lucide-react";
+import { Activity, LayoutDashboard, Settings, History, Wallet, TrendingUp, Bell } from "lucide-react";
 import Link from "next/link";
 import { usePathname } from "next/navigation";
 
@@ -9,10 +9,12 @@ export default function Sidebar() {
 
   const navItems = [
     { name: "Dashboard", href: "/", icon: LayoutDashboard },
-    { name: "Positions", href: "#positions", icon: Activity },
-    { name: "History", href: "#history", icon: History },
-    { name: "Wallet", href: "#wallet", icon: Wallet },
-    { name: "Settings", href: "#settings", icon: Settings },
+    { name: "Positions", href: "/positions", icon: Activity },
+    { name: "History", href: "/history", icon: History },
+    { name: "Performance", href: "/performance", icon: TrendingUp },
+    { name: "Alerts", href: "/alerts", icon: Bell },
+    { name: "Wallet", href: "/wallet", icon: Wallet },
+    { name: "Settings", href: "/settings", icon: Settings },
   ];
 
   return (

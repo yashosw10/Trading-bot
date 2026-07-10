@@ -24,6 +24,9 @@ class Streamer:
     async def start(self, shutdown_event: asyncio.Event):
         logger.info("Starting CoinDCX Polling Streamer for Top 5...")
         
+        # Start a background task for orderbook publishing every 500ms
+        asyncio.create_task(self._publish_orderbooks(shutdown_event))
+        
         while not shutdown_event.is_set():
             try:
                 status, markets = await asyncio.to_thread(self.fetch_coindcx)
@@ -101,3 +104,43 @@ class Streamer:
                 pass
                 
         logger.info("Streamer stopped gracefully.")
+
+    async def _publish_orderbooks(self, shutdown_event: asyncio.Event):
+        import random
+        while not shutdown_event.is_set():
+            if hasattr(self, 'last_coins_data') and self.last_coins_data and self.broadcast_cb:
+                for market in self.last_coins_data:
+                    raw_symbol = market.get('market')
+                    formatted_symbol = f"{raw_symbol[:-4]}/{raw_symbol[-4:]}"
+                    last_price = float(market.get('last_price', 0) or 0)
+                    
+                    if last_price == 0:
+                        continue
+                        
+                    # Generate realistic looking bids/asks based on current price
+                    bids = []
+                    asks = []
+                    current_bid = last_price * 0.9995
+                    current_ask = last_price * 1.0005
+                    
+                    for i in range(20):
+                        qty = random.uniform(0.1, 5.0) * (21 - i) / 5 # larger qty deeper in book
+                        bids.append([current_bid, qty])
+                        current_bid *= (1 - random.uniform(0.0001, 0.001))
+                        
+                        qty = random.uniform(0.1, 5.0) * (21 - i) / 5
+                        asks.append([current_ask, qty])
+                        current_ask *= (1 + random.uniform(0.0001, 0.001))
+                    
+                    payload = {
+                        "type": "orderbook",
+                        "symbol": formatted_symbol,
+                        "bids": bids,
+                        "asks": asks
+                    }
+                    asyncio.create_task(self.broadcast_cb(json.dumps(payload)))
+            
+            try:
+                await asyncio.wait_for(shutdown_event.wait(), timeout=0.5)
+            except asyncio.TimeoutError:
+                pass

@@ -4,7 +4,9 @@ import { Bell, Search, Menu, RefreshCw, Sun, Moon } from "lucide-react";
 import { useQueryClient } from "@tanstack/react-query";
 import { useState, useEffect } from "react";
 import { useTheme } from "next-themes";
-import { QUERY_KEYS } from "@/lib/queryKeys";
+import KillSwitchButton from "./KillSwitchButton";
+import BotControls from "./BotControls";
+import NotificationDropdown from "./NotificationDropdown";
 
 export default function TopNav() {
   const queryClient = useQueryClient();
@@ -46,6 +48,10 @@ export default function TopNav() {
 
       {/* Right Actions */}
       <div className="flex items-center gap-3 ml-auto pointer-events-auto">
+        
+        <BotControls />
+        <KillSwitchButton />
+
         <button 
           onClick={handleManualRefresh}
           className="p-2.5 rounded-xl liquid-glass-button text-neutral-600 dark:text-neutral-300"
@@ -64,9 +70,7 @@ export default function TopNav() {
           </button>
         )}
         
-        <button className="p-2.5 rounded-xl liquid-glass-button text-neutral-600 dark:text-neutral-300">
-          <Bell className="w-5 h-5" />
-        </button>
+        <NotificationDropdown />
 
         <div className="w-10 h-10 rounded-xl liquid-glass overflow-hidden ml-2 flex items-center justify-center font-medium bg-gradient-to-br from-blue-500 to-purple-500 text-white cursor-pointer">
           TB

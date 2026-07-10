@@ -6,6 +6,8 @@ import { QUERY_KEYS } from "@/lib/queryKeys";
 import type { Currency } from "@/types/api";
 import { motion } from "framer-motion";
 import { TrendingUp, TrendingDown, Wallet, PieChart, Activity } from "lucide-react";
+import { useMemo } from "react";
+import { startOfDay, startOfWeek, startOfMonth } from "date-fns";
 
 export default function PortfolioSummary({ currency }: { currency: Currency }) {
   const { data: balances, isLoading: loadingBalances, isError: errB } = useQuery({
@@ -22,6 +24,43 @@ export default function PortfolioSummary({ currency }: { currency: Currency }) {
     queryKey: QUERY_KEYS.totalProfit(currency),
     queryFn: () => api.getTotalProfit(currency)
   });
+
+  const { data: trades, isLoading: loadingTrades, isError: errT } = useQuery({
+    queryKey: QUERY_KEYS.trades,
+    queryFn: api.getTrades
+  });
+
+  const { dailyPnL, weeklyPnL, monthlyPnL } = useMemo(() => {
+    if (!trades) return { dailyPnL: 0, weeklyPnL: 0, monthlyPnL: 0 };
+    
+    const now = new Date();
+    const dayStart = startOfDay(now);
+    const weekStart = startOfWeek(now);
+    const monthStart = startOfMonth(now);
+
+    let dPnL = 0;
+    let wPnL = 0;
+    let mPnL = 0;
+
+    // We filter by side === 'sell' because PnL is realized and timestamp corresponds to closed_at
+    const sellTrades = trades.filter(t => t.side === 'sell');
+
+    sellTrades.forEach(t => {
+      const closedAt = new Date(t.timestamp);
+      // convert fiat PnL to current selected currency
+      const usd_to_inr = 83.0;
+      const usd_to_eur = 0.92;
+      let pnl = t.pnl_fiat;
+      if (currency === 'INR') pnl *= usd_to_inr;
+      else if (currency === 'EUR') pnl *= usd_to_eur;
+
+      if (closedAt >= dayStart) dPnL += pnl;
+      if (closedAt >= weekStart) wPnL += pnl;
+      if (closedAt >= monthStart) mPnL += pnl;
+    });
+
+    return { dailyPnL: dPnL, weeklyPnL: wPnL, monthlyPnL: mPnL };
+  }, [trades, currency]);
 
   const isLoading = loadingBalances || loadingInvested || loadingProfit;
   const isError = errB || errI || errP;
@@ -109,6 +148,28 @@ export default function PortfolioSummary({ currency }: { currency: Currency }) {
           )}
         </motion.div>
       ))}
+
+      {/* Aggregate Time-bucketed PnL */}
+      <div className="md:col-span-2 xl:col-span-4 grid grid-cols-1 md:grid-cols-3 gap-4 mt-2">
+        <PnLPill label="Daily PnL" value={dailyPnL} currency={currency} isLoading={loadingTrades} />
+        <PnLPill label="Weekly PnL" value={weeklyPnL} currency={currency} isLoading={loadingTrades} />
+        <PnLPill label="Monthly PnL" value={monthlyPnL} currency={currency} isLoading={loadingTrades} />
+      </div>
+    </div>
+  );
+}
+
+function PnLPill({ label, value, currency, isLoading }: { label: string, value: number, currency: string, isLoading: boolean }) {
+  if (isLoading) {
+    return <div className="liquid-glass-card h-12 glass-skeleton rounded-xl border border-black/5 dark:border-white/5" />;
+  }
+  const isProfit = value >= 0;
+  return (
+    <div className="liquid-glass-card p-4 rounded-xl border border-black/5 dark:border-white/5 flex items-center justify-between">
+      <span className="text-sm font-medium text-neutral-500 dark:text-neutral-400">{label}</span>
+      <span className={`text-base font-bold font-mono ${isProfit ? 'text-green-500' : 'text-red-500'}`}>
+        {isProfit ? '+' : ''}{currency} {Math.abs(value).toLocaleString(undefined, { minimumFractionDigits: 2, maximumFractionDigits: 2 })}
+      </span>
     </div>
   );
 }

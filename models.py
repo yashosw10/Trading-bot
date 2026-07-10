@@ -14,3 +14,5 @@ class TradeSignal(BaseModel):
     side: str  # 'buy' or 'sell'
     fiat_currency: str  # 'USD', 'INR', or 'EUR'
     amount: float  # Quantity of crypto to buy/sell
+    mfe: float = 0.0
+    mae: float = 0.0

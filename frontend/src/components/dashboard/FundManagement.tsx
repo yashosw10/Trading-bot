@@ -106,7 +106,7 @@ export default function FundManagement({ defaultCurrency }: { defaultCurrency: C
             className="p-4 rounded-xl bg-red-500/10 border border-red-500/20 text-red-600 dark:text-red-400 text-sm flex items-start gap-2"
           >
             <AlertCircle className="w-5 h-5 shrink-0" />
-            <p>Failed to add funds. Check connection.</p>
+            <p>{mutation.error?.message || "Failed to add funds. Check connection."}</p>
           </motion.div>
         )}
       </AnimatePresence>

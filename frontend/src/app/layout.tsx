@@ -4,6 +4,8 @@ import "./globals.css";
 import QueryProvider from "@/providers/QueryProvider";
 
 import { ThemeProvider } from "@/providers/ThemeProvider";
+import GlobalAlerts from "@/components/layout/GlobalAlerts";
+import { Toaster } from "react-hot-toast";
 
 const inter = Inter({ subsets: ["latin"] });
 
@@ -19,7 +21,7 @@ export default function RootLayout({
 }>) {
   return (
     <html lang="en" suppressHydrationWarning>
-      <body className={`${inter.className} min-h-screen bg-neutral-100 dark:bg-[#0a0a0c] text-neutral-900 dark:text-neutral-50 antialiased selection:bg-blue-500/30`}>
+      <body suppressHydrationWarning className={`${inter.className} min-h-screen bg-neutral-100 dark:bg-[#0a0a0c] text-neutral-900 dark:text-neutral-50 antialiased selection:bg-blue-500/30`}>
         
         {/* Background Ambient Glow & Fluid Orbs */}
         <div className="fixed inset-0 z-[-1] overflow-hidden pointer-events-none">

@@ -143,6 +143,8 @@ class SymbolState:
         self.avg_entry: float       = 0.0
         self.last_buy_price: float  = 0.0
         self.entry_grid: float      = 0.0   # grid spacing locked in at the time of the base order
+        self.price_high: float      = 0.0   # highest price during position lifetime (MFE)
+        self.price_low: float       = 0.0   # lowest price during position lifetime (MAE)
 
         # ── Take-profit tranche flags ──
         self.tp1_done: bool    = False
@@ -243,6 +245,13 @@ class StrategyEngine:
         st.total_invested  += amount_fiat
         st.last_buy_price   = price
         st.avg_entry        = st.total_invested / st.position_amount
+        if st.dca_layer == 0:
+            st.price_high = price
+            st.price_low = price
+        else:
+            st.price_high = max(st.price_high, price)
+            st.price_low = min(st.price_low, price)
+            
         st.dca_layer       += 1
         st.trail_high       = max(st.trail_high, price)
 
@@ -250,13 +259,19 @@ class StrategyEngine:
                           price: float, ticker: TickerData, label: str):
         if amount_crypto <= 0:
             return
-        logger.info(f"SELL {symbol} | {label} | {amount_crypto:.6f} @ {price:.4f}")
+            
+        st = self.states[symbol]
+        mfe = (st.price_high - st.avg_entry) / st.avg_entry * 100 if st.avg_entry > 0 else 0.0
+        mae = (st.avg_entry - st.price_low) / st.avg_entry * 100 if st.avg_entry > 0 else 0.0
+
+        logger.info(f"SELL {symbol} | {label} | {amount_crypto:.6f} @ {price:.4f} (MFE: {mfe:.2f}%, MAE: {mae:.2f}%)")
         await self.order_queue.put((
             TradeSignal(symbol=symbol, side='sell',
-                        fiat_currency=self.fiat_currency, amount=amount_crypto),
+                        fiat_currency=self.fiat_currency, amount=amount_crypto,
+                        mfe=mfe, mae=mae),
             ticker
         ))
-        st = self.states[symbol]
+        
         fraction           = amount_crypto / st.position_amount if st.position_amount > 0 else 1.0
         st.total_invested  -= st.total_invested * fraction
         st.position_amount -= amount_crypto
@@ -272,6 +287,8 @@ class StrategyEngine:
         st.tp1_done        = False
         st.tp2_done        = False
         st.trail_high      = 0.0
+        st.price_high      = 0.0
+        st.price_low       = 0.0
         if cooldown:
             st.reentry_until = datetime.now(timezone.utc).timestamp() + REENTRY_COOLDOWN_S
             logger.info(f"{symbol}: {REENTRY_COOLDOWN_S}s re-entry cooldown started.")
@@ -299,12 +316,16 @@ class StrategyEngine:
                 price_inr=0, price_eur=0, price_change_percent=0,
                 timestamp=datetime.now(timezone.utc)
             )
+            st = self.states[sym]
+            mfe = (st.price_high - st.avg_entry) / st.avg_entry * 100 if st.avg_entry > 0 else 0.0
+            mae = (st.avg_entry - st.price_low) / st.avg_entry * 100 if st.avg_entry > 0 else 0.0
+            
             await self.order_queue.put((
                 TradeSignal(symbol=sym, side='sell',
-                            fiat_currency=self.fiat_currency, amount=amount),
+                            fiat_currency=self.fiat_currency, amount=amount,
+                            mfe=mfe, mae=mae),
                 fake_ticker
             ))
-            st = self.states[sym]
             st.position_amount = 0.0
             st.total_invested  = 0.0
             await asyncio.sleep(PANIC_SELL_STAGGER_S)
@@ -345,6 +366,10 @@ class StrategyEngine:
 
                 # ── Feed raw tick ─────────────────────────────────────
                 st.raw_prices.append(price)
+
+                if st.dca_layer > 0:
+                    st.price_high = max(st.price_high, price)
+                    st.price_low = min(st.price_low, price)
 
                 # ── Aggregate raw tick → 1-min candle ─────────────────
                 candle_close = st.aggregator.feed(price, ticker.timestamp)
