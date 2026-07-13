@@ -324,8 +324,18 @@ async def resume_bot():
 async def test_telegram():
     from utils import send_telegram_alert
     try:
-        await send_telegram_alert("🔔 <b>Test Alert</b>\nThis is a test message from your Trading Bot.")
-        return {"status": "success", "message": "Test alert sent."}
+        config = await database.get_bot_config()
+        token = config.get("telegram_bot_token")
+        chat_id = config.get("telegram_chat_id")
+        
+        if not token or not chat_id:
+            return {"status": "error", "message": "Credentials missing. Did you click 'Save Config' first?"}
+            
+        success, err_msg = await send_telegram_alert("🔔 <b>Test Alert</b>\nThis is a test message from your Trading Bot.")
+        if success:
+            return {"status": "success", "message": "Test alert sent! Check your Telegram app."}
+        else:
+            return {"status": "error", "message": f"Telegram Error: {err_msg}"}
     except Exception as e:
         return {"status": "error", "message": str(e)}
 
@@ -358,6 +368,20 @@ async def manual_order(order: OrderRequest):
     if price_usd <= 0:
         raise HTTPException(status_code=400, detail="Could not fetch valid price for execution.")
         
+    fee = order.amount * price_usd * 0.001
+    pnl_fiat = 0.0
+    pnl_percent = 0.0
+    
+    if order.side.lower() == 'sell':
+        pos = await database.get_position(order.symbol)
+        if pos:
+            avg_price = pos.get('average_price_usd', 0)
+            if avg_price > 0:
+                cost_basis = avg_price * order.amount
+                sale_value = price_usd * order.amount
+                pnl_fiat = sale_value - cost_basis - fee
+                pnl_percent = (pnl_fiat / cost_basis) * 100
+                
     # Since manual order, we don't have strategy context, pass mfe=0, mae=0
     success = await database.execute_trade(
         symbol=order.symbol,
@@ -365,7 +389,9 @@ async def manual_order(order: OrderRequest):
         fiat_currency="USD",
         amount=order.amount,
         price=price_usd,
-        fee=(order.amount * price_usd * 0.001)
+        fee=fee,
+        pnl_fiat=pnl_fiat,
+        pnl_percent=pnl_percent
     )
     
     if not success:

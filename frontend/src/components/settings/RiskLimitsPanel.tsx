@@ -133,7 +133,7 @@ export default function RiskLimitsPanel() {
           <button 
             type="submit" 
             disabled={mutation.isPending}
-            className="flex-1 liquid-glass-button bg-blue-500 text-white py-3 font-semibold hover:bg-blue-600 transition-colors flex items-center justify-center gap-2"
+            className="flex-1 bg-blue-600 text-white rounded-xl py-3 font-semibold hover:bg-blue-700 transition-colors flex items-center justify-center gap-2 shadow-sm"
           >
             <Save className="w-4 h-4" />
             {mutation.isPending ? "Saving..." : "Save Config"}
