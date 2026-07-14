@@ -62,6 +62,8 @@ async def init_db():
                 is_paused BOOLEAN DEFAULT 0,
                 telegram_bot_token TEXT DEFAULT '',
                 telegram_chat_id TEXT DEFAULT '',
+                trade_alerts_enabled BOOLEAN DEFAULT 1,
+                daily_summary_enabled BOOLEAN DEFAULT 0,
                 updated_at TEXT DEFAULT (datetime('now'))
             )
         ''')
@@ -73,7 +75,27 @@ async def init_db():
             await db.execute("ALTER TABLE bot_config ADD COLUMN telegram_chat_id TEXT DEFAULT ''")
         except Exception:
             pass
+        try:
+            await db.execute("ALTER TABLE bot_config ADD COLUMN trade_alerts_enabled BOOLEAN DEFAULT 1")
+        except Exception:
+            pass
+        try:
+            await db.execute("ALTER TABLE bot_config ADD COLUMN daily_summary_enabled BOOLEAN DEFAULT 0")
+        except Exception:
+            pass
         await db.execute('INSERT OR IGNORE INTO bot_config (id) VALUES (1)')
+        
+        await db.execute('''
+            CREATE TABLE IF NOT EXISTS fx_rates (
+                currency TEXT PRIMARY KEY,
+                rate REAL,
+                updated_at DATETIME DEFAULT CURRENT_TIMESTAMP
+            )
+        ''')
+        
+        # Seed with initial rates if empty
+        await db.execute('INSERT OR IGNORE INTO fx_rates (currency, rate) VALUES ("INR", 83.0)')
+        await db.execute('INSERT OR IGNORE INTO fx_rates (currency, rate) VALUES ("EUR", 0.92)')
         
         await db.execute('''
             CREATE TABLE IF NOT EXISTS backtest_results (
@@ -146,6 +168,13 @@ async def get_total_profit(fiat_currency: str) -> float:
             row = await cursor.fetchone()
             return row[0] if row and row[0] else 0.0
 
+async def get_24h_pnl(fiat_currency: str) -> float:
+    async with aiosqlite.connect(DB_FILE) as db:
+        async with db.execute("SELECT SUM(pnl_fiat) FROM trades WHERE fiat_currency = ? AND timestamp >= datetime('now', '-1 day')", (fiat_currency,)) as cursor:
+            row = await cursor.fetchone()
+            return row[0] if row and row[0] else 0.0
+
+
 async def clear_history():
     async with aiosqlite.connect(DB_FILE) as db:
         await db.execute('DELETE FROM trades')
@@ -165,21 +194,22 @@ async def get_position(symbol: str) -> dict:
                 }
             return None
 
-async def execute_trade(symbol: str, side: str, fiat_currency: str, amount: float, price: float, fee: float, pnl_fiat: float = 0.0, pnl_percent: float = 0.0, mfe: float = 0.0, mae: float = 0.0):
+async def execute_trade(symbol: str, side: str, fiat_currency: str, amount: float, price: float, fee: float, pnl_fiat: float = 0.0, pnl_percent: float = 0.0, mfe: float = 0.0, mae: float = 0.0, mode: str = 'paper'):
     total_cost = (amount * price) + fee if side == 'buy' else (amount * price) - fee
-    usd_to_inr = 83.0
-    usd_to_eur = 0.92
+    usd_to_inr = await get_fx_rate("INR")
+    usd_to_eur = await get_fx_rate("EUR")
     
     async with aiosqlite.connect(DB_FILE) as db:
         async with db.execute("BEGIN IMMEDIATE"):
-            if side == 'buy':
-                async with db.execute('SELECT balance FROM wallet WHERE currency = ?', (fiat_currency,)) as cursor:
-                    row = await cursor.fetchone()
-                    balance = row[0] if row else 0.0
-                if balance < total_cost:
-                    logger.warning(f"Insufficient {fiat_currency} balance for {side} {amount} {symbol}")
-                    await db.rollback()
-                    return False
+            if mode == 'paper':
+                if side == 'buy':
+                    async with db.execute('SELECT balance FROM wallet WHERE currency = ?', (fiat_currency,)) as cursor:
+                        row = await cursor.fetchone()
+                        balance = row[0] if row else 0.0
+                    if balance < total_cost:
+                        logger.warning(f"Insufficient {fiat_currency} balance for {side} {amount} {symbol}")
+                        await db.rollback()
+                        return False
             
             if side == 'sell':
                 async with db.execute('SELECT amount FROM positions WHERE symbol = ?', (symbol,)) as cursor:
@@ -190,10 +220,11 @@ async def execute_trade(symbol: str, side: str, fiat_currency: str, amount: floa
                     await db.rollback()
                     return False
 
-            if side == 'buy':
-                await db.execute('UPDATE wallet SET balance = balance - ? WHERE currency = ?', (total_cost, fiat_currency))
-            else:
-                await db.execute('UPDATE wallet SET balance = balance + ? WHERE currency = ?', (total_cost, fiat_currency))
+            if mode == 'paper':
+                if side == 'buy':
+                    await db.execute('UPDATE wallet SET balance = balance - ? WHERE currency = ?', (total_cost, fiat_currency))
+                else:
+                    await db.execute('UPDATE wallet SET balance = balance + ? WHERE currency = ?', (total_cost, fiat_currency))
 
             async with db.execute('SELECT amount, average_price_usd, average_price_inr, average_price_eur FROM positions WHERE symbol = ?', (symbol,)) as cursor:
                 pos = await cursor.fetchone()
@@ -249,7 +280,7 @@ async def execute_trade(symbol: str, side: str, fiat_currency: str, amount: floa
 
 async def get_bot_config() -> dict:
     async with aiosqlite.connect(DB_FILE) as db:
-        async with db.execute('SELECT daily_loss_limit, max_drawdown_pct, max_position_size, max_open_positions, mode, is_paused, telegram_bot_token, telegram_chat_id, updated_at FROM bot_config WHERE id = 1') as cursor:
+        async with db.execute('SELECT daily_loss_limit, max_drawdown_pct, max_position_size, max_open_positions, mode, is_paused, telegram_bot_token, telegram_chat_id, trade_alerts_enabled, daily_summary_enabled, updated_at FROM bot_config WHERE id = 1') as cursor:
             row = await cursor.fetchone()
             if row:
                 return {
@@ -261,7 +292,9 @@ async def get_bot_config() -> dict:
                     "is_paused": bool(row[5]),
                     "telegram_bot_token": row[6],
                     "telegram_chat_id": row[7],
-                    "updated_at": row[8]
+                    "trade_alerts_enabled": bool(row[8]),
+                    "daily_summary_enabled": bool(row[9]),
+                    "updated_at": row[10]
                 }
             return {}
 
@@ -269,8 +302,9 @@ async def update_bot_config(config: dict) -> bool:
     async with aiosqlite.connect(DB_FILE) as db:
         set_clauses = []
         values = []
+        allowed_keys = ['daily_loss_limit', 'max_drawdown_pct', 'max_position_size', 'max_open_positions', 'mode', 'is_paused', 'telegram_bot_token', 'telegram_chat_id', 'trade_alerts_enabled', 'daily_summary_enabled']
         for k, v in config.items():
-            if k in ['daily_loss_limit', 'max_drawdown_pct', 'max_position_size', 'max_open_positions', 'mode', 'is_paused', 'telegram_bot_token', 'telegram_chat_id']:
+            if k in allowed_keys:
                 set_clauses.append(f"{k} = ?")
                 values.append(v)
         if not set_clauses:
@@ -281,3 +315,20 @@ async def update_bot_config(config: dict) -> bool:
         await db.execute(query, tuple(values))
         await db.commit()
         return True
+
+async def get_fx_rate(currency: str) -> float:
+    if currency == 'USD':
+        return 1.0
+    async with aiosqlite.connect(DB_FILE) as db:
+        async with db.execute('SELECT rate FROM fx_rates WHERE currency = ?', (currency,)) as cursor:
+            row = await cursor.fetchone()
+            return row[0] if row else (83.0 if currency == 'INR' else 0.92)
+
+async def update_fx_rate(currency: str, rate: float):
+    async with aiosqlite.connect(DB_FILE) as db:
+        await db.execute('''
+            INSERT INTO fx_rates (currency, rate, updated_at) 
+            VALUES (?, ?, datetime('now'))
+            ON CONFLICT(currency) DO UPDATE SET rate = excluded.rate, updated_at = datetime('now')
+        ''', (currency, rate))
+        await db.commit()

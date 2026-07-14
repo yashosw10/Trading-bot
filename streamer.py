@@ -1,9 +1,10 @@
 import asyncio
-import requests
+import httpx
 import json
 from datetime import datetime, timezone
 from loguru import logger
 from models import TickerData
+import database
 
 class Streamer:
     def __init__(self, queue: asyncio.Queue, symbol: str = 'BTC/USDT', broadcast_cb=None):
@@ -16,142 +17,120 @@ class Streamer:
         
         from collections import defaultdict
         self.price_history = defaultdict(list)
-        
-        self.usd_to_inr = 83.0
-        self.usd_to_eur = 0.92
 
-    def fetch_coindcx(self):
-        resp = requests.get(self.rest_url, timeout=10.0)
-        return resp.status_code, resp.json()
+    async def fetch_coindcx_async(self, client: httpx.AsyncClient):
+        try:
+            resp = await client.get(self.rest_url)
+            return resp.status_code, resp.json()
+        except Exception as e:
+            logger.error(f"Error connecting to CoinDCX: {e}")
+            return 0, []
 
     async def start(self, shutdown_event: asyncio.Event):
-        logger.info("Starting CoinDCX Polling Streamer for Top 5...")
+        logger.info("Starting CoinDCX Polling Streamer with Rate-Limit Backoff...")
         
-        # Start a background task for orderbook publishing every 500ms
+        # Start a background task for real orderbook publishing
         asyncio.create_task(self._publish_orderbooks(shutdown_event))
         
-        while not shutdown_event.is_set():
-            try:
-                status, markets = await asyncio.to_thread(self.fetch_coindcx)
-                
-                if status == 200:
-                    found_coins = []
-                    for market in markets:
-                        if market.get('market') in self.top_5_markets:
-                            raw_symbol = market.get('market')
-                            formatted_symbol = f"{raw_symbol[:-4]}/{raw_symbol[-4:]}" # e.g. BTC/USDT
-                            
-                            price_usd = float(market.get('last_price', 0) or 0)
-                            price_inr = price_usd * self.usd_to_inr
-                            price_eur = price_usd * self.usd_to_eur
-                            price_change_percent = float(market.get('change_24_hour', 0) or 0)
-                            
-                            self.price_history[formatted_symbol].append(price_usd)
-                            self.price_history[formatted_symbol] = self.price_history[formatted_symbol][-24:]
-                            
-                            ticker_data = TickerData(
-                                symbol=formatted_symbol,
-                                price_usd=price_usd,
-                                price_inr=price_inr,
-                                price_eur=price_eur,
-                                price_change_percent=price_change_percent,
-                                sparkline=self.price_history[formatted_symbol],
-                                timestamp=datetime.now(timezone.utc)
-                            )
-                            
-                            await self.queue.put(ticker_data)
-                            if self.broadcast_cb:
-                                payload = {"type": "ticker", **ticker_data.model_dump()}
-                                payload["timestamp"] = payload["timestamp"].isoformat()
-                                asyncio.create_task(self.broadcast_cb(json.dumps(payload)))
-                            
-                            found_coins.append(market)
+        async with httpx.AsyncClient(timeout=10.0, headers={'User-Agent': 'Mozilla/5.0'}) as client:
+            while not shutdown_event.is_set():
+                try:
+                    status, markets = await self.fetch_coindcx_async(client)
                     
-                    logger.debug("Successfully polled CoinDCX Top 5 prices.")
-                    self.last_coins_data = found_coins
-                elif status == 429 and hasattr(self, 'last_coins_data') and self.last_coins_data:
-                    logger.info("CoinDCX rate limit hit. Generating local random walk to keep prices live...")
-                    import random
-                    for market in self.last_coins_data:
-                        jitter = 1.0 + random.uniform(-0.001, 0.001)
-                        market['last_price'] = str(float(market.get('last_price', 0)) * jitter)
-                        market['change_24_hour'] = str(float(market.get('change_24_hour', 0)) + random.uniform(-0.05, 0.05))
+                    if status == 200:
+                        # Fetch dynamic FX rates from the database cache
+                        usd_to_inr = await database.get_fx_rate("INR")
+                        usd_to_eur = await database.get_fx_rate("EUR")
+
+                        found_coins = []
+                        for market in markets:
+                            if market.get('market') in self.top_5_markets:
+                                raw_symbol = market.get('market')
+                                formatted_symbol = f"{raw_symbol[:-4]}/{raw_symbol[-4:]}" # e.g. BTC/USDT
+                                
+                                price_usd = float(market.get('last_price', 0) or 0)
+                                price_inr = price_usd * usd_to_inr
+                                price_eur = price_usd * usd_to_eur
+                                price_change_percent = float(market.get('change_24_hour', 0) or 0)
+                                
+                                self.price_history[formatted_symbol].append(price_usd)
+                                self.price_history[formatted_symbol] = self.price_history[formatted_symbol][-24:]
+                                
+                                ticker_data = TickerData(
+                                    symbol=formatted_symbol,
+                                    price_usd=price_usd,
+                                    price_inr=price_inr,
+                                    price_eur=price_eur,
+                                    price_change_percent=price_change_percent,
+                                    sparkline=self.price_history[formatted_symbol],
+                                    timestamp=datetime.now(timezone.utc)
+                                )
+                                
+                                await self.queue.put(ticker_data)
+                                if self.broadcast_cb:
+                                    payload = {"type": "ticker", **ticker_data.model_dump()}
+                                    payload["timestamp"] = payload["timestamp"].isoformat()
+                                    asyncio.create_task(self.broadcast_cb(json.dumps(payload)))
+                                
+                                found_coins.append(market)
                         
-                        raw_symbol = market.get('market')
-                        formatted_symbol = f"{raw_symbol[:-4]}/{raw_symbol[-4:]}"
-                        
-                        price_usd = float(market['last_price'])
-                        price_inr = price_usd * self.usd_to_inr
-                        price_eur = price_usd * self.usd_to_eur
-                        price_change_percent = float(market['change_24_hour'])
-                        
-                        self.price_history[formatted_symbol].append(price_usd)
-                        self.price_history[formatted_symbol] = self.price_history[formatted_symbol][-24:]
-                        
-                        ticker_data = TickerData(
-                            symbol=formatted_symbol,
-                            price_usd=price_usd,
-                            price_inr=price_inr,
-                            price_eur=price_eur,
-                            price_change_percent=price_change_percent,
-                            sparkline=self.price_history[formatted_symbol],
-                            timestamp=datetime.now(timezone.utc)
-                        )
-                        
-                        await self.queue.put(ticker_data)
-                        if self.broadcast_cb:
-                            payload = {"type": "ticker", **ticker_data.model_dump()}
-                            payload["timestamp"] = payload["timestamp"].isoformat()
-                            asyncio.create_task(self.broadcast_cb(json.dumps(payload)))
-                else:
-                    logger.warning(f"CoinDCX API returned status {status}")
-            except Exception as fetch_e:
-                logger.error(f"CoinDCX API fetch error: {fetch_e}")
-            
-            # Wait 5 seconds before polling again to respect rate limits
-            try:
-                await asyncio.wait_for(shutdown_event.wait(), timeout=5.0)
-            except asyncio.TimeoutError:
-                pass
+                        logger.debug("Successfully polled CoinDCX Top 5 prices.")
+                        self.last_coins_data = found_coins
+                    elif status == 429:
+                        logger.warning("CoinDCX rate limit hit (429). Pausing for 30 seconds...")
+                        await asyncio.sleep(30)
+                    else:
+                        logger.warning(f"CoinDCX API returned status {status}")
+                except Exception as fetch_e:
+                    logger.error(f"CoinDCX API fetch error: {fetch_e}")
                 
+                # Wait 5 seconds before polling again to respect rate limits
+                try:
+                    await asyncio.wait_for(shutdown_event.wait(), timeout=5.0)
+                except asyncio.TimeoutError:
+                    pass
+                    
         logger.info("Streamer stopped gracefully.")
 
     async def _publish_orderbooks(self, shutdown_event: asyncio.Event):
-        import random
-        while not shutdown_event.is_set():
-            if hasattr(self, 'last_coins_data') and self.last_coins_data and self.broadcast_cb:
-                for market in self.last_coins_data:
-                    raw_symbol = market.get('market')
-                    formatted_symbol = f"{raw_symbol[:-4]}/{raw_symbol[-4:]}"
-                    last_price = float(market.get('last_price', 0) or 0)
-                    
-                    if last_price == 0:
-                        continue
+        async with httpx.AsyncClient(timeout=10.0, headers={'User-Agent': 'Mozilla/5.0'}) as client:
+            while not shutdown_event.is_set():
+                if hasattr(self, 'last_coins_data') and self.last_coins_data and self.broadcast_cb:
+                    for market in self.last_coins_data:
+                        raw_symbol = market.get('market')
+                        formatted_symbol = f"{raw_symbol[:-4]}/{raw_symbol[-4:]}"
                         
-                    # Generate realistic looking bids/asks based on current price
-                    bids = []
-                    asks = []
-                    current_bid = last_price * 0.9995
-                    current_ask = last_price * 1.0005
-                    
-                    for i in range(20):
-                        qty = random.uniform(0.1, 5.0) * (21 - i) / 5 # larger qty deeper in book
-                        bids.append([current_bid, qty])
-                        current_bid *= (1 - random.uniform(0.0001, 0.001))
+                        base = raw_symbol[:-4]
+                        quote = raw_symbol[-4:]
+                        orderbook_pair = f"B-{base}_{quote}"
                         
-                        qty = random.uniform(0.1, 5.0) * (21 - i) / 5
-                        asks.append([current_ask, qty])
-                        current_ask *= (1 + random.uniform(0.0001, 0.001))
-                    
-                    payload = {
-                        "type": "orderbook",
-                        "symbol": formatted_symbol,
-                        "bids": bids,
-                        "asks": asks
-                    }
-                    asyncio.create_task(self.broadcast_cb(json.dumps(payload)))
-            
-            try:
-                await asyncio.wait_for(shutdown_event.wait(), timeout=0.5)
-            except asyncio.TimeoutError:
-                pass
+                        try:
+                            # Fetch real orderbook
+                            r = await client.get(f"https://public.coindcx.com/market_data/orderbook?pair={orderbook_pair}")
+                            if r.status_code == 200:
+                                data = r.json()
+                                
+                                # Convert {"price": "qty"} dict to list of [price, qty] floats
+                                bids = [[float(k), float(v)] for k, v in data.get('bids', {}).items()]
+                                asks = [[float(k), float(v)] for k, v in data.get('asks', {}).items()]
+                                
+                                # Sort bids descending, asks ascending and take top 20
+                                bids = sorted(bids, key=lambda x: x[0], reverse=True)[:20]
+                                asks = sorted(asks, key=lambda x: x[0])[:20]
+                                
+                                payload = {
+                                    "type": "orderbook",
+                                    "symbol": formatted_symbol,
+                                    "bids": bids,
+                                    "asks": asks
+                                }
+                                asyncio.create_task(self.broadcast_cb(json.dumps(payload)))
+                            elif r.status_code == 429:
+                                await asyncio.sleep(10) # backoff orderbook
+                        except Exception as e:
+                            logger.error(f"Error fetching real orderbook for {formatted_symbol}: {e}")
+                
+                try:
+                    await asyncio.wait_for(shutdown_event.wait(), timeout=3.0)
+                except asyncio.TimeoutError:
+                    pass

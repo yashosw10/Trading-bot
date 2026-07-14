@@ -1,4 +1,7 @@
 import asyncio
+from dotenv import load_dotenv
+load_dotenv()
+
 from datetime import datetime, timezone
 from fastapi import FastAPI, WebSocket, WebSocketDisconnect
 from fastapi.middleware.cors import CORSMiddleware
@@ -8,6 +11,23 @@ import database
 from streamer import Streamer
 from strategy import StrategyEngine
 from order_manager import OrderManager
+from datetime import timedelta
+
+async def daily_summary_loop(shutdown_event: asyncio.Event):
+    import utils
+    while not shutdown_event.is_set():
+        now = datetime.now(timezone.utc)
+        next_midnight = (now + timedelta(days=1)).replace(hour=0, minute=0, second=0, microsecond=0)
+        sleep_seconds = (next_midnight - now).total_seconds()
+        
+        try:
+            await asyncio.wait_for(shutdown_event.wait(), timeout=sleep_seconds)
+            break
+        except asyncio.TimeoutError:
+            pass
+            
+        await utils.send_daily_summary()
+
 
 @asynccontextmanager
 async def lifespan(app: FastAPI):
@@ -15,6 +35,9 @@ async def lifespan(app: FastAPI):
     logger.info("Initializing Crypto Paper Trading Bot with FastAPI Lifespan...")
     
     await database.init_db()
+    
+    import utils
+    await utils.update_fx_rates()
     
     shutdown_event = asyncio.Event()
     data_queue = asyncio.Queue()
@@ -32,17 +55,18 @@ async def lifespan(app: FastAPI):
     app.state.streamer_task = asyncio.create_task(streamer.start(shutdown_event))
     app.state.strategy_task = asyncio.create_task(strategy.start(shutdown_event))
     app.state.order_manager_task = asyncio.create_task(order_manager.start(shutdown_event))
+    app.state.daily_summary_task = asyncio.create_task(daily_summary_loop(shutdown_event))
     
     yield
     
     logger.warning("FastAPI shutdown! Gracefully stopping bot components...")
     shutdown_event.set()
     
-    for task in [app.state.streamer_task, app.state.strategy_task, app.state.order_manager_task]:
+    for task in [app.state.streamer_task, app.state.strategy_task, app.state.order_manager_task, app.state.daily_summary_task]:
         if not task.done():
             task.cancel()
             
-    await asyncio.gather(app.state.streamer_task, app.state.strategy_task, app.state.order_manager_task, return_exceptions=True)
+    await asyncio.gather(app.state.streamer_task, app.state.strategy_task, app.state.order_manager_task, app.state.daily_summary_task, return_exceptions=True)
     logger.info("Bot shutdown complete.")
 
 app = FastAPI(title="Trading Bot API", lifespan=lifespan)
@@ -89,8 +113,8 @@ async def add_funds(req: AddFundsRequest):
     await database.add_balance(req.currency, req.amount)
     
     # Sync other currencies
-    usd_to_inr = 83.0
-    usd_to_eur = 0.92
+    usd_to_inr = await database.get_fx_rate("INR")
+    usd_to_eur = await database.get_fx_rate("EUR")
     
     if req.currency == 'USD':
         await database.add_balance('INR', req.amount * usd_to_inr)
@@ -111,10 +135,25 @@ async def add_funds(req: AddFundsRequest):
 
 @app.get("/api/balances")
 async def get_balances():
-    usd = await database.get_balance("USD")
-    inr = await database.get_balance("INR")
-    eur = await database.get_balance("EUR")
-    return {"USD": usd, "INR": inr, "EUR": eur}
+    config = await database.get_bot_config()
+    if config.get("mode") == "live":
+        from exchange import CoinDCXClient
+        client = CoinDCXClient()
+        live_balances = await client.get_balances()
+        usd = 0.0
+        if isinstance(live_balances, list):
+            for b in live_balances:
+                if b.get("currency") == "USDT":
+                    usd = float(b.get("balance", 0.0))
+                    break
+        usd_to_inr = await database.get_fx_rate("INR")
+        usd_to_eur = await database.get_fx_rate("EUR")
+        return {"USD": usd, "INR": usd * usd_to_inr, "EUR": usd * usd_to_eur}
+    else:
+        usd = await database.get_balance("USD")
+        inr = await database.get_balance("INR")
+        eur = await database.get_balance("EUR")
+        return {"USD": usd, "INR": inr, "EUR": eur}
 
 SYMBOLS = ["BTC/USDT", "ETH/USDT", "BNB/USDT", "SOL/USDT", "XRP/USDT"]
 
@@ -132,8 +171,8 @@ async def api_get_total_profit(currency: str = "USD"):
     # All trades are stored with fiat_currency='USD'.
     # Always fetch the USD sum, then convert to the requested currency.
     profit_usd = await database.get_total_profit("USD")
-    usd_to_inr = 83.0
-    usd_to_eur = 0.92
+    usd_to_inr = await database.get_fx_rate("INR")
+    usd_to_eur = await database.get_fx_rate("EUR")
     if currency == "INR":
         return {"total_profit": round(profit_usd * usd_to_inr, 2)}
     elif currency == "EUR":
@@ -146,8 +185,8 @@ async def get_invested():
     Reads directly from the positions table (amount × average_price_usd).
     """
     import aiosqlite
-    usd_to_inr = 83.0
-    usd_to_eur = 0.92
+    usd_to_inr = await database.get_fx_rate("INR")
+    usd_to_eur = await database.get_fx_rate("EUR")
     invested_usd = 0.0
     async with aiosqlite.connect(database.DB_FILE) as db:
         async with db.execute(
@@ -162,6 +201,12 @@ async def get_invested():
         "INR": round(invested_usd * usd_to_inr, 2),
         "EUR": round(invested_usd * usd_to_eur, 2),
     }
+
+@app.get("/api/fx-rates")
+async def api_get_fx_rates():
+    inr = await database.get_fx_rate("INR")
+    eur = await database.get_fx_rate("EUR")
+    return {"INR": inr, "EUR": eur}
 
 @app.get("/api/trades")
 async def get_trades():

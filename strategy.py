@@ -347,6 +347,9 @@ class StrategyEngine:
 
         while not shutdown_event.is_set():
             try:
+                config = await database.get_bot_config()
+                global_kill_pct = config.get("daily_loss_limit", 15.0) / 100.0
+                
                 ticker: TickerData = await asyncio.wait_for(
                     self.data_queue.get(), timeout=1.0
                 )
@@ -426,10 +429,10 @@ class StrategyEngine:
                     if s.total_invested > 0 and s.raw_prices
                 )
                 if (self.starting_balance > 0 and
-                        total_unrealized <= -(self.starting_balance * GLOBAL_KILL_PCT)):
+                        total_unrealized <= -(self.starting_balance * global_kill_pct)):
                     logger.critical(
                         f"GLOBAL KILL SWITCH | unrealized PnL ${total_unrealized:.2f} | "
-                        f"halting bot and panic-selling (worst first)."
+                        f"limit -{global_kill_pct*100:.1f}% | halting bot and panic-selling (worst first)."
                     )
                     self.bot_halted = True
                     asyncio.create_task(self._staggered_panic_sell())

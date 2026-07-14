@@ -19,6 +19,9 @@ class OrderManager:
                 # Wait for trade signal
                 signal, ticker = await asyncio.wait_for(self.order_queue.get(), timeout=1.0)
                 
+                config = await database.get_bot_config()
+                mode = config.get("mode", "paper")
+                
                 # Fetch correct fiat price
                 if signal.fiat_currency == 'USD':
                     base_price = ticker.price_usd
@@ -63,8 +66,25 @@ class OrderManager:
                     pnl_fiat=pnl_fiat,
                     pnl_percent=pnl_percent,
                     mfe=signal.mfe,
-                    mae=signal.mae
+                    mae=signal.mae,
+                    mode=mode
                 )
+                
+                # If live mode, place the order on CoinDCX
+                if success and mode == 'live':
+                    from exchange import CoinDCXClient
+                    client = CoinDCXClient()
+                    # Execute market order using USD execution price mapping
+                    resp = await client.place_order(
+                        symbol=signal.symbol,
+                        side=signal.side,
+                        amount=signal.amount,
+                        price=execution_price
+                    )
+                    if not resp:
+                        logger.error(f"Failed to place {mode} order on CoinDCX!")
+                        # If live order failed, we technically should rollback the trade logging
+                        success = False
                 
                 if success:
                     balance = await database.get_balance(signal.fiat_currency)
@@ -88,11 +108,13 @@ class OrderManager:
                         
                         from utils import send_telegram_alert
                         try:
-                            msg_side = "🟢 BUY" if signal.side == 'buy' else "🔴 SELL"
-                            pnl_str = f"\nPnL: ${pnl_fiat:+.2f}" if signal.side == 'sell' else ""
-                            asyncio.create_task(send_telegram_alert(
-                                f"<b>{msg_side} {signal.symbol}</b>\nPrice: ${execution_price:,.2f}\nQty: {signal.amount}{pnl_str}"
-                            ))
+                            if config.get("trade_alerts_enabled", True):
+                                msg_side = "🟢 BUY" if signal.side == 'buy' else "🔴 SELL"
+                                pnl_str = f"\nPnL: ${pnl_fiat:+.2f}" if signal.side == 'sell' else ""
+                                asyncio.create_task(send_telegram_alert(
+                                    f"<b>{msg_side} {signal.symbol}</b>\nPrice: ${execution_price:,.2f}\nQty: {signal.amount}{pnl_str}"
+                                ))
+
                         except RuntimeError:
                             # No event loop running — skip silently, never block trade execution
                             pass

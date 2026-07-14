@@ -6,6 +6,7 @@ import { useTheme } from "next-themes";
 import { useState, useEffect } from "react";
 import { motion } from "framer-motion";
 import RiskLimitsPanel from "@/components/settings/RiskLimitsPanel";
+import NotificationSettingsPanel from "@/components/settings/NotificationSettingsPanel";
 
 export default function SettingsPage() {
   const { theme, setTheme } = useTheme();
@@ -96,40 +97,7 @@ export default function SettingsPage() {
 
         {/* Notifications & API (Mock) */}
         <div className="space-y-6">
-          <div className="liquid-glass-card p-6 relative overflow-hidden group">
-            <div className="absolute top-6 right-6">
-              <span className="px-3 py-1 rounded-full bg-amber-500/10 text-amber-600 dark:text-amber-400 text-xs font-semibold uppercase tracking-wider">
-                Coming Soon
-              </span>
-            </div>
-            <h3 className="text-lg font-semibold mb-6 flex items-center gap-2 text-neutral-400">
-              <Bell className="w-5 h-5" />
-              Notifications
-            </h3>
-            <form onSubmit={handleMockSubmit} className="space-y-4 opacity-60">
-              <div className="flex items-center justify-between p-4 bg-black/5 dark:bg-white/5 rounded-2xl">
-                <div>
-                  <p className="font-medium">Trade Execution Alerts</p>
-                  <p className="text-sm text-neutral-500">Receive email on filled orders.</p>
-                </div>
-                <div className="w-12 h-7 bg-neutral-300 dark:bg-neutral-700 rounded-full cursor-not-allowed">
-                  <div className="w-5 h-5 bg-white rounded-full m-1" />
-                </div>
-              </div>
-              <div className="flex items-center justify-between p-4 bg-black/5 dark:bg-white/5 rounded-2xl">
-                <div>
-                  <p className="font-medium">Daily Summary</p>
-                  <p className="text-sm text-neutral-500">Receive a daily PnL report.</p>
-                </div>
-                <div className="w-12 h-7 bg-blue-500 rounded-full cursor-not-allowed">
-                  <div className="w-5 h-5 bg-white rounded-full m-1 translate-x-5" />
-                </div>
-              </div>
-              <button type="submit" className="w-full liquid-glass-button bg-neutral-500/10 text-neutral-500 py-3 font-semibold mt-4">
-                Save Notification Settings
-              </button>
-            </form>
-          </div>
+          <NotificationSettingsPanel />
 
           <div className="liquid-glass-card p-6 relative overflow-hidden group">
             <div className="absolute top-6 right-6">

@@ -14,15 +14,19 @@ import { Wallet as WalletIcon, PieChart as PieChartIcon } from "lucide-react";
 export default function WalletPage() {
   const [currencyPref, setCurrencyPref] = useState<Currency>("USD");
 
-  const { data: balances, isLoading } = useQuery({
-    queryKey: QUERY_KEYS.balances,
-    queryFn: api.getBalances
+  const { data: positions, isLoading } = useQuery({
+    queryKey: QUERY_KEYS.positions,
+    queryFn: api.getPositions
   });
 
-  const chartData = balances ? Object.entries(balances).map(([key, value]) => ({
-    name: key,
-    value: value
-  })).filter(item => item.value > 0) : [];
+  const chartData = positions ? Object.entries(positions).map(([symbol, pos]: [string, any]) => {
+    const priceKey = `average_price_${currencyPref.toLowerCase()}`;
+    const value = pos.amount * (pos[priceKey] || pos.average_price_usd);
+    return {
+      name: symbol,
+      value: value
+    };
+  }).filter(item => item.value > 0) : [];
 
   const COLORS = ['#3b82f6', '#8b5cf6', '#10b981', '#f59e0b'];
 

@@ -30,6 +30,11 @@ export default function PortfolioSummary({ currency }: { currency: Currency }) {
     queryFn: api.getTrades
   });
 
+  const { data: fxRates } = useQuery({
+    queryKey: ['fxRates'],
+    queryFn: api.getFxRates
+  });
+
   const { dailyPnL, weeklyPnL, monthlyPnL } = useMemo(() => {
     if (!trades) return { dailyPnL: 0, weeklyPnL: 0, monthlyPnL: 0 };
     
@@ -48,8 +53,8 @@ export default function PortfolioSummary({ currency }: { currency: Currency }) {
     sellTrades.forEach(t => {
       const closedAt = new Date(t.timestamp);
       // convert fiat PnL to current selected currency
-      const usd_to_inr = 83.0;
-      const usd_to_eur = 0.92;
+      const usd_to_inr = fxRates?.INR ?? 83.0;
+      const usd_to_eur = fxRates?.EUR ?? 0.92;
       let pnl = t.pnl_fiat;
       if (currency === 'INR') pnl *= usd_to_inr;
       else if (currency === 'EUR') pnl *= usd_to_eur;
@@ -60,7 +65,7 @@ export default function PortfolioSummary({ currency }: { currency: Currency }) {
     });
 
     return { dailyPnL: dPnL, weeklyPnL: wPnL, monthlyPnL: mPnL };
-  }, [trades, currency]);
+  }, [trades, currency, fxRates]);
 
   const isLoading = loadingBalances || loadingInvested || loadingProfit;
   const isError = errB || errI || errP;
@@ -81,6 +86,10 @@ export default function PortfolioSummary({ currency }: { currency: Currency }) {
   const balanceVal = balances?.[currency] || 0;
   const investedVal = invested?.[currency] || 0;
   const profitVal = profit?.total_profit || 0;
+  
+  // Calculate Indian 30% Crypto Tax on total profit
+  const postTaxProfitVal = profitVal > 0 ? profitVal * 0.70 : profitVal;
+
   const totalValue = balanceVal + investedVal;
 
   const isProfit = profitVal >= 0;
@@ -109,6 +118,14 @@ export default function PortfolioSummary({ currency }: { currency: Currency }) {
       isProfitVal: true
     },
     {
+      label: "Net Profit (Post-Tax 30%)",
+      value: formatMoney(postTaxProfitVal),
+      icon: isProfit ? TrendingUp : TrendingDown,
+      color: isProfit ? "text-green-600" : "text-red-500",
+      bg: isProfit ? "bg-green-600/10" : "bg-red-500/10",
+      isProfitVal: true
+    },
+    {
       label: "Portfolio Value",
       value: formatMoney(totalValue),
       icon: Activity,
@@ -118,7 +135,7 @@ export default function PortfolioSummary({ currency }: { currency: Currency }) {
   ];
 
   return (
-    <div className="grid grid-cols-1 md:grid-cols-2 xl:grid-cols-4 gap-4">
+    <div className="grid grid-cols-1 md:grid-cols-2 xl:grid-cols-5 gap-4">
       {metrics.map((m, i) => (
         <motion.div
           key={m.label}
@@ -150,7 +167,7 @@ export default function PortfolioSummary({ currency }: { currency: Currency }) {
       ))}
 
       {/* Aggregate Time-bucketed PnL */}
-      <div className="md:col-span-2 xl:col-span-4 grid grid-cols-1 md:grid-cols-3 gap-4 mt-2">
+      <div className="md:col-span-2 xl:col-span-5 grid grid-cols-1 md:grid-cols-3 gap-4 mt-2">
         <PnLPill label="Daily PnL" value={dailyPnL} currency={currency} isLoading={loadingTrades} />
         <PnLPill label="Weekly PnL" value={weeklyPnL} currency={currency} isLoading={loadingTrades} />
         <PnLPill label="Monthly PnL" value={monthlyPnL} currency={currency} isLoading={loadingTrades} />

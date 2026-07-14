@@ -25,6 +25,7 @@ export const api = {
   getTotalProfit: (currency: string) => fetcher<TotalProfitResponse>(ENDPOINTS.TOTAL_PROFIT(currency)),
   getInvested: () => fetcher<InvestedResponse>(ENDPOINTS.INVESTED),
   getTrades: () => fetcher<TradesResponse>(ENDPOINTS.TRADES),
+  getFxRates: () => fetcher<{INR: number; EUR: number}>(`${API_BASE_URL}/fx-rates`),
   getOhlcv: (symbol: string = 'BTC/USDT', interval: string = '1h') => fetcher<any>(`${API_BASE_URL}/ohlcv?symbol=${symbol}&interval=${interval}`),
   getIndicators: (symbol: string, type: string, interval: string) => fetcher<any>(`${API_BASE_URL}/indicators?symbol=${symbol}&type=${type}&interval=${interval}`),
   getConfig: () => fetcher<any>(`${API_BASE_URL}/config`),
