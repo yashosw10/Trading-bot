@@ -6,50 +6,54 @@ DB_FILE = 'paper_trading.db'
 
 async def init_db():
     async with aiosqlite.connect(DB_FILE) as db:
-        await db.execute('''
-            CREATE TABLE IF NOT EXISTS wallet (
-                currency TEXT PRIMARY KEY,
-                balance REAL
-            )
-        ''')
-        
-        await db.execute('''
-            CREATE TABLE IF NOT EXISTS positions (
-                symbol TEXT PRIMARY KEY,
-                amount REAL,
-                average_price_usd REAL,
-                average_price_inr REAL,
-                average_price_eur REAL
-            )
-        ''')
-        
-        await db.execute('''
-            CREATE TABLE IF NOT EXISTS trades (
-                id INTEGER PRIMARY KEY AUTOINCREMENT,
-                symbol TEXT,
-                side TEXT,
-                fiat_currency TEXT,
-                amount REAL,
-                price REAL,
-                fee REAL,
-                pnl_fiat REAL DEFAULT 0.0,
-                pnl_percent REAL DEFAULT 0.0,
-                timestamp DATETIME DEFAULT CURRENT_TIMESTAMP
-            )
-        ''')
-        
-        # Migration: Add pnl_fiat, pnl_percent, mfe, mae if they don't exist
+        # Migrate old tables if they exist (ignore errors if already migrated)
         try:
-            await db.execute('ALTER TABLE trades ADD COLUMN pnl_fiat REAL DEFAULT 0.0')
-            await db.execute('ALTER TABLE trades ADD COLUMN pnl_percent REAL DEFAULT 0.0')
+            await db.execute('ALTER TABLE wallet RENAME TO wallet_paper')
+        except Exception:
+            pass
+        try:
+            await db.execute('ALTER TABLE positions RENAME TO positions_paper')
+        except Exception:
+            pass
+        try:
+            await db.execute('ALTER TABLE trades RENAME TO trades_paper')
         except Exception:
             pass
             
-        try:
-            await db.execute('ALTER TABLE trades ADD COLUMN mfe REAL DEFAULT 0.0')
-            await db.execute('ALTER TABLE trades ADD COLUMN mae REAL DEFAULT 0.0')
-        except Exception:
-            pass
+        for mode in ['paper', 'live']:
+            await db.execute(f'''
+                CREATE TABLE IF NOT EXISTS wallet_{mode} (
+                    currency TEXT PRIMARY KEY,
+                    balance REAL
+                )
+            ''')
+            
+            await db.execute(f'''
+                CREATE TABLE IF NOT EXISTS positions_{mode} (
+                    symbol TEXT PRIMARY KEY,
+                    amount REAL,
+                    average_price_usd REAL,
+                    average_price_inr REAL,
+                    average_price_eur REAL
+                )
+            ''')
+            
+            await db.execute(f'''
+                CREATE TABLE IF NOT EXISTS trades_{mode} (
+                    id INTEGER PRIMARY KEY AUTOINCREMENT,
+                    symbol TEXT,
+                    side TEXT,
+                    fiat_currency TEXT,
+                    amount REAL,
+                    price REAL,
+                    fee REAL,
+                    pnl_fiat REAL DEFAULT 0.0,
+                    pnl_percent REAL DEFAULT 0.0,
+                    mfe REAL DEFAULT 0.0,
+                    mae REAL DEFAULT 0.0,
+                    timestamp DATETIME DEFAULT CURRENT_TIMESTAMP
+                )
+            ''')
             
         await db.execute('''
             CREATE TABLE IF NOT EXISTS bot_config (
@@ -136,54 +140,54 @@ async def init_db():
             pass
             
         # Initialize virtual balances if not exists
-        await db.execute('INSERT OR IGNORE INTO wallet (currency, balance) VALUES ("USD", 10000.0)')
-        await db.execute('INSERT OR IGNORE INTO wallet (currency, balance) VALUES ("INR", 830000.0)') # ~10k USD
-        await db.execute('INSERT OR IGNORE INTO wallet (currency, balance) VALUES ("EUR", 9200.0)')   # ~10k USD
+        await db.execute('INSERT OR IGNORE INTO wallet_paper (currency, balance) VALUES ("USD", 10000.0)')
+        await db.execute('INSERT OR IGNORE INTO wallet_paper (currency, balance) VALUES ("INR", 830000.0)') # ~10k USD
+        await db.execute('INSERT OR IGNORE INTO wallet_paper (currency, balance) VALUES ("EUR", 9200.0)')   # ~10k USD
         
         await db.commit()
     logger.info("Database initialized with default balances and bot_config.")
 
-async def get_balance(currency: str) -> float:
+async def get_balance(currency: str, mode: str = 'paper') -> float:
     async with aiosqlite.connect(DB_FILE) as db:
-        async with db.execute('SELECT balance FROM wallet WHERE currency = ?', (currency,)) as cursor:
+        async with db.execute(f'SELECT balance FROM wallet_{mode} WHERE currency = ?', (currency,)) as cursor:
             row = await cursor.fetchone()
             return row[0] if row else 0.0
 
-async def set_balance(currency: str, amount: float):
+async def set_balance(currency: str, amount: float, mode: str = 'paper'):
     async with aiosqlite.connect(DB_FILE) as db:
-        await db.execute('INSERT OR REPLACE INTO wallet (currency, balance) VALUES (?, ?)', (currency, amount))
+        await db.execute(f'INSERT OR REPLACE INTO wallet_{mode} (currency, balance) VALUES (?, ?)', (currency, amount))
         await db.commit()
 
-async def add_balance(currency: str, amount: float):
+async def add_balance(currency: str, amount: float, mode: str = 'paper'):
     async with aiosqlite.connect(DB_FILE) as db:
-        await db.execute('''
-            INSERT INTO wallet (currency, balance) VALUES (?, ?)
+        await db.execute(f'''
+            INSERT INTO wallet_{mode} (currency, balance) VALUES (?, ?)
             ON CONFLICT(currency) DO UPDATE SET balance = balance + excluded.balance
         ''', (currency, amount))
         await db.commit()
 
-async def get_total_profit(fiat_currency: str) -> float:
+async def get_total_profit(fiat_currency: str, mode: str = 'paper') -> float:
     async with aiosqlite.connect(DB_FILE) as db:
-        async with db.execute('SELECT SUM(pnl_fiat) FROM trades WHERE fiat_currency = ?', (fiat_currency,)) as cursor:
+        async with db.execute(f'SELECT SUM(pnl_fiat) FROM trades_{mode} WHERE fiat_currency = ?', (fiat_currency,)) as cursor:
             row = await cursor.fetchone()
             return row[0] if row and row[0] else 0.0
 
-async def get_24h_pnl(fiat_currency: str) -> float:
+async def get_24h_pnl(fiat_currency: str, mode: str = 'paper') -> float:
     async with aiosqlite.connect(DB_FILE) as db:
-        async with db.execute("SELECT SUM(pnl_fiat) FROM trades WHERE fiat_currency = ? AND timestamp >= datetime('now', '-1 day')", (fiat_currency,)) as cursor:
+        async with db.execute(f"SELECT SUM(pnl_fiat) FROM trades_{mode} WHERE fiat_currency = ? AND timestamp >= datetime('now', '-1 day')", (fiat_currency,)) as cursor:
             row = await cursor.fetchone()
             return row[0] if row and row[0] else 0.0
 
 
-async def clear_history():
+async def clear_history(mode: str = 'paper'):
     async with aiosqlite.connect(DB_FILE) as db:
-        await db.execute('DELETE FROM trades')
-        await db.execute('DELETE FROM positions')
+        await db.execute(f'DELETE FROM trades_{mode}')
+        await db.execute(f'DELETE FROM positions_{mode}')
         await db.commit()
 
-async def get_position(symbol: str) -> dict:
+async def get_position(symbol: str, mode: str = 'paper') -> dict:
     async with aiosqlite.connect(DB_FILE) as db:
-        async with db.execute('SELECT amount, average_price_usd, average_price_inr, average_price_eur FROM positions WHERE symbol = ?', (symbol,)) as cursor:
+        async with db.execute(f'SELECT amount, average_price_usd, average_price_inr, average_price_eur FROM positions_{mode} WHERE symbol = ?', (symbol,)) as cursor:
             row = await cursor.fetchone()
             if row:
                 return {
@@ -194,6 +198,18 @@ async def get_position(symbol: str) -> dict:
                 }
             return None
 
+async def get_all_positions(mode: str = 'paper') -> list[dict]:
+    async with aiosqlite.connect(DB_FILE) as db:
+        async with db.execute(f'SELECT symbol, amount, average_price_usd, average_price_inr, average_price_eur FROM positions_{mode} WHERE amount > 0') as cursor:
+            rows = await cursor.fetchall()
+            return [{
+                "symbol": row[0],
+                "amount": row[1],
+                "average_price_usd": row[2],
+                "average_price_inr": row[3],
+                "average_price_eur": row[4]
+            } for row in rows]
+
 async def execute_trade(symbol: str, side: str, fiat_currency: str, amount: float, price: float, fee: float, pnl_fiat: float = 0.0, pnl_percent: float = 0.0, mfe: float = 0.0, mae: float = 0.0, mode: str = 'paper'):
     total_cost = (amount * price) + fee if side == 'buy' else (amount * price) - fee
     usd_to_inr = await get_fx_rate("INR")
@@ -203,7 +219,7 @@ async def execute_trade(symbol: str, side: str, fiat_currency: str, amount: floa
         async with db.execute("BEGIN IMMEDIATE"):
             if mode == 'paper':
                 if side == 'buy':
-                    async with db.execute('SELECT balance FROM wallet WHERE currency = ?', (fiat_currency,)) as cursor:
+                    async with db.execute(f'SELECT balance FROM wallet_{mode} WHERE currency = ?', (fiat_currency,)) as cursor:
                         row = await cursor.fetchone()
                         balance = row[0] if row else 0.0
                     if balance < total_cost:
@@ -212,7 +228,7 @@ async def execute_trade(symbol: str, side: str, fiat_currency: str, amount: floa
                         return False
             
             if side == 'sell':
-                async with db.execute('SELECT amount FROM positions WHERE symbol = ?', (symbol,)) as cursor:
+                async with db.execute(f'SELECT amount FROM positions_{mode} WHERE symbol = ?', (symbol,)) as cursor:
                     row = await cursor.fetchone()
                     pos_amount = row[0] if row else 0.0
                 if pos_amount < amount:
@@ -222,11 +238,11 @@ async def execute_trade(symbol: str, side: str, fiat_currency: str, amount: floa
 
             if mode == 'paper':
                 if side == 'buy':
-                    await db.execute('UPDATE wallet SET balance = balance - ? WHERE currency = ?', (total_cost, fiat_currency))
+                    await db.execute(f'UPDATE wallet_{mode} SET balance = balance - ? WHERE currency = ?', (total_cost, fiat_currency))
                 else:
-                    await db.execute('UPDATE wallet SET balance = balance + ? WHERE currency = ?', (total_cost, fiat_currency))
+                    await db.execute(f'UPDATE wallet_{mode} SET balance = balance + ? WHERE currency = ?', (total_cost, fiat_currency))
 
-            async with db.execute('SELECT amount, average_price_usd, average_price_inr, average_price_eur FROM positions WHERE symbol = ?', (symbol,)) as cursor:
+            async with db.execute(f'SELECT amount, average_price_usd, average_price_inr, average_price_eur FROM positions_{mode} WHERE symbol = ?', (symbol,)) as cursor:
                 pos = await cursor.fetchone()
 
             new_amount = 0.0
@@ -254,8 +270,8 @@ async def execute_trade(symbol: str, side: str, fiat_currency: str, amount: floa
                     else:
                         avg_usd, avg_inr, avg_eur = pos[1], pos[2], pos[3]
                 
-                await db.execute('''
-                    UPDATE positions 
+                await db.execute(f'''
+                    UPDATE positions_{mode} 
                     SET amount = ?, average_price_usd = ?, average_price_inr = ?, average_price_eur = ? 
                     WHERE symbol = ?
                 ''', (new_amount, avg_usd, avg_inr, avg_eur, symbol))
@@ -265,13 +281,13 @@ async def execute_trade(symbol: str, side: str, fiat_currency: str, amount: floa
                     avg_usd = price_usd
                     avg_inr = avg_usd * usd_to_inr
                     avg_eur = avg_usd * usd_to_eur
-                    await db.execute('''
-                        INSERT INTO positions (symbol, amount, average_price_usd, average_price_inr, average_price_eur)
+                    await db.execute(f'''
+                        INSERT INTO positions_{mode} (symbol, amount, average_price_usd, average_price_inr, average_price_eur)
                         VALUES (?, ?, ?, ?, ?)
                     ''', (symbol, new_amount, avg_usd, avg_inr, avg_eur))
 
-            await db.execute('''
-                INSERT INTO trades (symbol, side, fiat_currency, amount, price, fee, pnl_fiat, pnl_percent, mfe, mae)
+            await db.execute(f'''
+                INSERT INTO trades_{mode} (symbol, side, fiat_currency, amount, price, fee, pnl_fiat, pnl_percent, mfe, mae)
                 VALUES (?, ?, ?, ?, ?, ?, ?, ?, ?, ?)
             ''', (symbol, side, fiat_currency, amount, price, fee, pnl_fiat, pnl_percent, mfe, mae))
             

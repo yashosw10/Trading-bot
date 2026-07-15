@@ -14,7 +14,7 @@ export default function BotControls() {
   });
 
   const pauseMutation = useMutation({
-    mutationFn: () => fetch('/api/bot/pause', { method: 'POST' }),
+    mutationFn: api.pauseBot,
     onSuccess: () => {
       queryClient.invalidateQueries({ queryKey: ['config'] });
       toast.success("Bot paused. No new positions will be opened.");
@@ -22,7 +22,7 @@ export default function BotControls() {
   });
 
   const resumeMutation = useMutation({
-    mutationFn: () => fetch('/api/bot/resume', { method: 'POST' }),
+    mutationFn: api.resumeBot,
     onSuccess: () => {
       queryClient.invalidateQueries({ queryKey: ['config'] });
       toast.success("Bot resumed.");
@@ -66,7 +66,15 @@ export default function BotControls() {
       </div>
 
       {/* Pause/Resume Toggle */}
-      {config.is_paused ? (
+      {config.is_panic_selling ? (
+        <button
+          disabled
+          className="p-2.5 rounded-xl liquid-glass-button text-red-500 animate-pulse"
+          title="Panic Selling..."
+        >
+          <div className="w-5 h-5 border-2 border-red-500 border-t-transparent rounded-full animate-spin" />
+        </button>
+      ) : (config.is_paused || config.bot_halted) ? (
         <button
           onClick={() => resumeMutation.mutate()}
           className="p-2.5 rounded-xl liquid-glass-button text-neutral-600 dark:text-neutral-300 hover:text-green-500 dark:hover:text-green-400"

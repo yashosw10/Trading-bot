@@ -37,6 +37,8 @@ export const api = {
     body: JSON.stringify(config)
   }),
   killBot: () => fetcher<{status: string, message: string}>(`${API_BASE_URL}/bot/kill`, { method: 'POST' }),
+  pauseBot: () => fetcher<{status: string, message: string}>(`${API_BASE_URL}/bot/pause`, { method: 'POST' }),
+  resumeBot: () => fetcher<{status: string, message: string}>(`${API_BASE_URL}/bot/resume`, { method: 'POST' }),
   
   addFunds: (payload: AddFundsPayload) => fetcher<AddFundsResponse>(ENDPOINTS.ADD_FUNDS, {
     method: 'POST',

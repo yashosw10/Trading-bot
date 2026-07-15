@@ -17,3 +17,4 @@ class TradeSignal(BaseModel):
     amount: float  # Quantity of crypto to buy/sell
     mfe: float = 0.0
     mae: float = 0.0
+    mode_override: str | None = None

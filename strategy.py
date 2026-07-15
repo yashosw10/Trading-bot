@@ -170,6 +170,7 @@ class StrategyEngine:
 
         self.states: dict[str, SymbolState] = {}
         self.bot_halted       = False
+        self.is_panic_selling = False
         self.starting_balance = 0.0
 
     # ══════════════════════════════════════════
@@ -295,40 +296,41 @@ class StrategyEngine:
 
     async def _staggered_panic_sell(self):
         """
-        Close all open positions, worst PnL first (from doc-2: avoids letting
-        the deepest-underwater position fall further while we exit others).
+        Close all open positions across both paper and live modes.
         Each sell is staggered by PANIC_SELL_STAGGER_S to reduce slippage.
         """
-        positions = []
-        for sym, st in self.states.items():
-            if st.total_invested > 0 and st.raw_prices:
-                cur_val = st.position_amount * st.raw_prices[-1]
-                pnl     = cur_val - st.total_invested
-                positions.append((pnl, sym, st.position_amount, st.raw_prices[-1]))
-
-        # Sort: most negative PnL first
-        positions.sort(key=lambda x: x[0])
-
-        for pnl, sym, amount, price in positions:
-            logger.critical(f"PANIC SELL {sym} | PnL ${pnl:.2f} | {amount:.6f} @ {price:.4f}")
-            fake_ticker = TickerData(
-                symbol=sym, price_usd=price,
-                price_inr=0, price_eur=0, price_change_percent=0,
-                timestamp=datetime.now(timezone.utc)
-            )
-            st = self.states[sym]
-            mfe = (st.price_high - st.avg_entry) / st.avg_entry * 100 if st.avg_entry > 0 else 0.0
-            mae = (st.avg_entry - st.price_low) / st.avg_entry * 100 if st.avg_entry > 0 else 0.0
-            
-            await self.order_queue.put((
-                TradeSignal(symbol=sym, side='sell',
-                            fiat_currency=self.fiat_currency, amount=amount,
-                            mfe=mfe, mae=mae),
-                fake_ticker
-            ))
-            st.position_amount = 0.0
-            st.total_invested  = 0.0
-            await asyncio.sleep(PANIC_SELL_STAGGER_S)
+        self.is_panic_selling = True
+        for mode in ['paper', 'live']:
+            positions = await database.get_all_positions(mode)
+            for pos in positions:
+                sym = pos['symbol']
+                amount = pos['amount']
+                
+                # Grab current price from active state if available, else fallback to avg price
+                st = self.states.get(sym)
+                price = st.raw_prices[-1] if st and st.raw_prices else pos['average_price_usd']
+                
+                logger.critical(f"PANIC SELL {sym} ({mode.upper()}) | {amount:.6f} @ {price:.4f}")
+                fake_ticker = TickerData(
+                    symbol=sym, price_usd=price,
+                    price_inr=0, price_eur=0, price_change_percent=0,
+                    timestamp=datetime.now(timezone.utc)
+                )
+                
+                mfe = (st.price_high - st.avg_entry) / st.avg_entry * 100 if st and st.avg_entry > 0 else 0.0
+                mae = (st.avg_entry - st.price_low) / st.avg_entry * 100 if st and st.avg_entry > 0 else 0.0
+                
+                await self.order_queue.put((
+                    TradeSignal(symbol=sym, side='sell',
+                                fiat_currency=self.fiat_currency, amount=amount,
+                                mfe=mfe, mae=mae, mode_override=mode),
+                    fake_ticker
+                ))
+                if st:
+                    st.position_amount = 0.0
+                    st.total_invested  = 0.0
+                await asyncio.sleep(PANIC_SELL_STAGGER_S)
+        self.is_panic_selling = False
 
     # ══════════════════════════════════════════
     #  Main event loop
@@ -349,6 +351,7 @@ class StrategyEngine:
             try:
                 config = await database.get_bot_config()
                 global_kill_pct = config.get("daily_loss_limit", 15.0) / 100.0
+                is_paused = config.get("is_paused", False)
                 
                 ticker: TickerData = await asyncio.wait_for(
                     self.data_queue.get(), timeout=1.0
@@ -470,6 +473,9 @@ class StrategyEngine:
                 #  Entry gates: concurrent cap · EMA trend · RSI oversold
                 # ════════════════════════════════════════════════════
                 if st.dca_layer == 0:
+                    if is_paused:
+                        self.data_queue.task_done()
+                        continue
                     if self._active_positions() >= MAX_CONCURRENT_POS:
                         self.data_queue.task_done()
                         continue

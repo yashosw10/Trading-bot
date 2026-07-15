@@ -59,7 +59,7 @@ export default function Home() {
 
       <div className="grid grid-cols-1 xl:grid-cols-4 gap-6">
         {/* Left Sidebar: Markets & Health */}
-        <div className="space-y-6">
+        <div className="space-y-6 xl:sticky xl:top-6 self-start">
           <MarketOverview activeCoin={activeCoin} onSelect={handleSetCoin} />
           <FeedHealthPanel />
         </div>
@@ -95,7 +95,7 @@ export default function Home() {
         </div>
 
         {/* Right Column: Actions */}
-        <div className="space-y-6">
+        <div className="space-y-6 xl:sticky xl:top-6 self-start">
           <ManualOrder />
           <FundManagement defaultCurrency={currencyPref} />
         </div>

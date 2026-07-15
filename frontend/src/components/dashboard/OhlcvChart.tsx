@@ -4,7 +4,9 @@ import { useQuery } from "@tanstack/react-query";
 import { api } from "@/lib/api";
 import { QUERY_KEYS } from "@/lib/queryKeys";
 import { ComposedChart, Line, Bar, XAxis, YAxis, Tooltip, ResponsiveContainer, CartesianGrid, ReferenceLine } from "recharts";
-import { BarChart2 } from "lucide-react";
+import { BarChart2, TrendingUp, AlertTriangle, ExternalLink } from "lucide-react";
+import { formatCurrency } from "@/lib/utils";
+import CustomSelect from "../ui/CustomSelect";
 import { useMemo, useState } from "react";
 
 export default function OhlcvChart({ activeCoin = "BTC/USDT" }: { activeCoin?: string }) {
@@ -68,15 +70,13 @@ export default function OhlcvChart({ activeCoin = "BTC/USDT" }: { activeCoin?: s
         </h3>
         
         <div className="flex items-center gap-2">
-          <select 
-            value={indicatorType}
-            onChange={(e) => setIndicatorType(e.target.value)}
-            className="bg-black/5 dark:bg-white/5 border-none outline-none text-sm font-medium rounded-xl px-3 py-1.5 focus:ring-2 focus:ring-blue-500/50"
-          >
-            {indicators.map(ind => (
-              <option key={ind} value={ind}>{ind === 'NONE' ? 'Indicators' : ind}</option>
-            ))}
-          </select>
+          <div className="w-40">
+            <CustomSelect 
+              value={indicatorType}
+              onChange={(val) => setIndicatorType(val)}
+              options={indicators.map(ind => ({ label: ind === 'NONE' ? 'Indicators' : ind, value: ind }))}
+            />
+          </div>
 
           <div className="flex gap-1 bg-black/5 dark:bg-white/5 p-1 rounded-xl">
             {timeframes.map((tf) => (

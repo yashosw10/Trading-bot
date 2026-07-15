@@ -4,6 +4,7 @@ import { useState } from "react";
 import { useMutation, useQueryClient } from "@tanstack/react-query";
 import { api } from "@/lib/api";
 import { QUERY_KEYS } from "@/lib/queryKeys";
+import CustomSelect from "../ui/CustomSelect";
 import type { Currency } from "@/types/api";
 import type { AddFundsPayload } from "@/types/fund";
 import { ArrowRight, CheckCircle2, AlertCircle } from "lucide-react";
@@ -39,15 +40,15 @@ export default function FundManagement({ defaultCurrency }: { defaultCurrency: C
       <form onSubmit={handleSubmit} className="space-y-5">
         <div className="space-y-2">
           <label className="text-sm font-medium text-neutral-600 dark:text-neutral-300">Currency</label>
-          <select
+          <CustomSelect
             value={currency}
-            onChange={(e) => setCurrency(e.target.value as Currency)}
-            className="w-full bg-black/5 dark:bg-white/5 border border-black/10 dark:border-white/10 rounded-xl px-4 py-2.5 outline-none focus:ring-2 focus:ring-blue-500/50 backdrop-blur-md transition-all appearance-none text-neutral-900 dark:text-white"
-          >
-            <option value="USD" className="text-black">USD</option>
-            <option value="INR" className="text-black">INR</option>
-            <option value="EUR" className="text-black">EUR</option>
-          </select>
+            onChange={(val) => setCurrency(val as Currency)}
+            options={[
+              { label: "USD", value: "USD" },
+              { label: "INR", value: "INR" },
+              { label: "EUR", value: "EUR" }
+            ]}
+          />
         </div>
 
         <div className="space-y-2">
@@ -58,19 +59,19 @@ export default function FundManagement({ defaultCurrency }: { defaultCurrency: C
             step={100}
             value={amount}
             onChange={(e) => setAmount(Number(e.target.value))}
-            className="w-full bg-black/5 dark:bg-white/5 border border-black/10 dark:border-white/10 rounded-xl px-4 py-2.5 outline-none focus:ring-2 focus:ring-blue-500/50 backdrop-blur-md transition-all text-neutral-900 dark:text-white"
+            className="w-full bg-black/5 dark:bg-white/5 border border-black/10 dark:border-white/10 rounded-xl px-4 py-2 outline-none focus:ring-2 focus:ring-blue-500/50 backdrop-blur-md transition-all text-neutral-900 dark:text-white"
           />
         </div>
 
-        <div className="flex items-center gap-3 py-2">
+        <div className="flex items-center gap-2 py-1 mt-1">
           <input
             type="checkbox"
             id="clear_history"
             checked={clearHistory}
             onChange={(e) => setClearHistory(e.target.checked)}
-            className="w-4 h-4 rounded border-gray-300 text-blue-500 focus:ring-blue-500"
+            className="w-4 h-4 rounded border-gray-300 text-blue-500 focus:ring-blue-500 mt-[1px]"
           />
-          <label htmlFor="clear_history" className="text-sm text-neutral-600 dark:text-neutral-300 cursor-pointer">
+          <label htmlFor="clear_history" className="text-sm text-neutral-600 dark:text-neutral-300 cursor-pointer select-none">
             Clear existing history
           </label>
         </div>

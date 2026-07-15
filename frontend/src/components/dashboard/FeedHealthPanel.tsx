@@ -4,13 +4,15 @@ import { useQuery } from "@tanstack/react-query";
 import { Activity, Database, Radio, Server } from "lucide-react";
 import { useEffect, useState } from "react";
 
+import { API_BASE_URL } from "@/lib/endpoints";
+
 export default function FeedHealthPanel() {
   const [lastUpdated, setLastUpdated] = useState<Date | null>(null);
 
   const { data: health, isLoading, isError } = useQuery({
     queryKey: ['health'],
     queryFn: async () => {
-      const res = await fetch('/api/health');
+      const res = await fetch(`${API_BASE_URL}/health`);
       if (!res.ok) throw new Error('Health check failed');
       return res.json();
     },
@@ -43,7 +45,7 @@ export default function FeedHealthPanel() {
         )}
       </div>
 
-      <div className="p-4 grid grid-cols-1 sm:grid-cols-3 gap-3">
+      <div className="p-4 grid grid-cols-1 sm:grid-cols-3 xl:grid-cols-1 gap-3">
         <div className="bg-black/5 dark:bg-white/5 rounded-xl p-3 flex items-center gap-3 min-w-0">
           <div className="w-10 h-10 rounded-full bg-blue-500/10 flex items-center justify-center shrink-0">
             <Database className="w-5 h-5 text-blue-500" />

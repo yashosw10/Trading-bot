@@ -20,7 +20,7 @@ class OrderManager:
                 signal, ticker = await asyncio.wait_for(self.order_queue.get(), timeout=1.0)
                 
                 config = await database.get_bot_config()
-                mode = config.get("mode", "paper")
+                mode = signal.mode_override if signal.mode_override else config.get("mode", "paper")
                 
                 # Fetch correct fiat price
                 if signal.fiat_currency == 'USD':
@@ -44,7 +44,7 @@ class OrderManager:
                 
                 # Fetch position to calculate PnL if selling
                 if signal.side == 'sell':
-                    pos = await database.get_position(signal.symbol)
+                    pos = await database.get_position(signal.symbol, mode=mode)
                     if pos:
                         avg_price = pos[f'average_price_{signal.fiat_currency.lower()}']
                         if avg_price > 0:
@@ -87,7 +87,7 @@ class OrderManager:
                         success = False
                 
                 if success:
-                    balance = await database.get_balance(signal.fiat_currency)
+                    balance = await database.get_balance(signal.fiat_currency, mode=mode)
                     logger.success(f"Trade successful! Remaining {signal.fiat_currency} Balance: {balance:.2f}")
                     if self.broadcast_cb:
                         payload = {

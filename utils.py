@@ -41,13 +41,14 @@ async def send_daily_summary():
         if not config.get("daily_summary_enabled", False):
             return
             
-        pnl_usd = await database.get_24h_pnl("USD")
+        mode = config.get("mode", "paper")
+        pnl_usd = await database.get_24h_pnl("USD", mode=mode)
         
         msg = "📊 <b>Daily Summary</b>\n\n"
         msg += f"<b>24h PnL (USD):</b> ${pnl_usd:+.2f}\n"
         
         # Optionally add total profit
-        total_pnl = await database.get_total_profit("USD")
+        total_pnl = await database.get_total_profit("USD", mode=mode)
         msg += f"<b>Total PnL (USD):</b> ${total_pnl:+.2f}\n"
         
         await send_telegram_alert(msg)

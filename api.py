@@ -3,7 +3,7 @@ from dotenv import load_dotenv
 load_dotenv()
 
 from datetime import datetime, timezone
-from fastapi import FastAPI, WebSocket, WebSocketDisconnect
+from fastapi import FastAPI, WebSocket, WebSocketDisconnect, Request
 from fastapi.middleware.cors import CORSMiddleware
 from contextlib import asynccontextmanager
 from loguru import logger
@@ -52,6 +52,7 @@ async def lifespan(app: FastAPI):
     order_manager = OrderManager(order_queue=order_queue, broadcast_cb=broadcast_ws)
 
     # Attach to app state so we can access them later if needed
+    app.state.strategy_engine = strategy
     app.state.streamer_task = asyncio.create_task(streamer.start(shutdown_event))
     app.state.strategy_task = asyncio.create_task(strategy.start(shutdown_event))
     app.state.order_manager_task = asyncio.create_task(order_manager.start(shutdown_event))
@@ -107,29 +108,37 @@ class AddFundsRequest(BaseModel):
     amount: float
     clear_history: bool = False
 
+@app.get("/api/health")
+async def health_check():
+    return {"status": "ok"}
+
 @app.post("/api/add-funds")
 async def add_funds(req: AddFundsRequest):
     # Add primary currency
     await database.add_balance(req.currency, req.amount)
     
     # Sync other currencies
+    config = await database.get_bot_config()
+    mode = config.get("mode", "paper")
+    
     usd_to_inr = await database.get_fx_rate("INR")
     usd_to_eur = await database.get_fx_rate("EUR")
-    
+
     if req.currency == 'USD':
-        await database.add_balance('INR', req.amount * usd_to_inr)
-        await database.add_balance('EUR', req.amount * usd_to_eur)
+        await database.add_balance('USD', req.amount, mode=mode)
+        await database.add_balance('INR', req.amount * usd_to_inr, mode=mode)
+        await database.add_balance('EUR', req.amount * usd_to_eur, mode=mode)
     elif req.currency == 'INR':
         usd_amount = req.amount / usd_to_inr
-        await database.add_balance('USD', usd_amount)
-        await database.add_balance('EUR', usd_amount * usd_to_eur)
+        await database.add_balance('USD', usd_amount, mode=mode)
+        await database.add_balance('EUR', usd_amount * usd_to_eur, mode=mode)
     elif req.currency == 'EUR':
         usd_amount = req.amount / usd_to_eur
-        await database.add_balance('USD', usd_amount)
-        await database.add_balance('INR', usd_amount * usd_to_inr)
+        await database.add_balance('USD', usd_amount, mode=mode)
+        await database.add_balance('INR', usd_amount * usd_to_inr, mode=mode)
 
     if req.clear_history:
-        await database.clear_history()
+        await database.clear_history(mode=mode)
         
     return {"status": "success", "message": f"Added {req.amount} to {req.currency} balance"}
 
@@ -150,18 +159,20 @@ async def get_balances():
         usd_to_eur = await database.get_fx_rate("EUR")
         return {"USD": usd, "INR": usd * usd_to_inr, "EUR": usd * usd_to_eur}
     else:
-        usd = await database.get_balance("USD")
-        inr = await database.get_balance("INR")
-        eur = await database.get_balance("EUR")
+        usd = await database.get_balance("USD", mode="paper")
+        inr = await database.get_balance("INR", mode="paper")
+        eur = await database.get_balance("EUR", mode="paper")
         return {"USD": usd, "INR": inr, "EUR": eur}
 
 SYMBOLS = ["BTC/USDT", "ETH/USDT", "BNB/USDT", "SOL/USDT", "XRP/USDT"]
 
 @app.get("/api/positions")
 async def get_positions():
+    config = await database.get_bot_config()
+    mode = config.get("mode", "paper")
     positions = {}
     for symbol in SYMBOLS:
-        pos = await database.get_position(symbol)
+        pos = await database.get_position(symbol, mode=mode)
         if pos and pos.get("amount", 0) > 0:
             positions[symbol] = pos
     return positions
@@ -170,7 +181,9 @@ async def get_positions():
 async def api_get_total_profit(currency: str = "USD"):
     # All trades are stored with fiat_currency='USD'.
     # Always fetch the USD sum, then convert to the requested currency.
-    profit_usd = await database.get_total_profit("USD")
+    config = await database.get_bot_config()
+    mode = config.get("mode", "paper")
+    profit_usd = await database.get_total_profit("USD", mode=mode)
     usd_to_inr = await database.get_fx_rate("INR")
     usd_to_eur = await database.get_fx_rate("EUR")
     if currency == "INR":
@@ -188,9 +201,12 @@ async def get_invested():
     usd_to_inr = await database.get_fx_rate("INR")
     usd_to_eur = await database.get_fx_rate("EUR")
     invested_usd = 0.0
+    config = await database.get_bot_config()
+    mode = config.get("mode", "paper")
+    
     async with aiosqlite.connect(database.DB_FILE) as db:
         async with db.execute(
-            "SELECT amount, average_price_usd FROM positions WHERE amount > 0.000001"
+            f"SELECT amount, average_price_usd FROM positions_{mode} WHERE amount > 0.000001"
         ) as cur:
             async for row in cur:
                 amount, avg_price_usd = row[0], row[1]
@@ -212,8 +228,11 @@ async def api_get_fx_rates():
 async def get_trades():
     import aiosqlite
     trades = []
+    config = await database.get_bot_config()
+    mode = config.get("mode", "paper")
+    
     async with aiosqlite.connect(database.DB_FILE) as db:
-        async with db.execute('SELECT symbol, side, fiat_currency, amount, price, fee, pnl_fiat, pnl_percent, timestamp FROM trades ORDER BY id DESC LIMIT 50') as cursor:
+        async with db.execute(f'SELECT symbol, side, fiat_currency, amount, price, fee, pnl_fiat, pnl_percent, timestamp FROM trades_{mode} ORDER BY id DESC LIMIT 50') as cursor:
             async for row in cursor:
                 trades.append({
                     "symbol": row[0],
@@ -230,32 +249,44 @@ async def get_trades():
 
 @app.get("/api/ohlcv")
 async def get_ohlcv(symbol: str = "BTC/USDT", interval: str = "1h", limit: int = 100):
-    import time
-    import random
-    now = int(time.time())
-    data = []
-    price = 65000.0
-    for i in range(limit):
-        ts = (now - (limit - i) * 3600) * 1000
-        open_p = price
-        close_p = price * random.uniform(0.99, 1.01)
-        high_p = max(open_p, close_p) * random.uniform(1.0, 1.005)
-        low_p = min(open_p, close_p) * random.uniform(0.995, 1.0)
-        vol = random.uniform(10, 500)
-        data.append({
-            "timestamp": ts,
-            "open": open_p,
-            "high": high_p,
-            "low": low_p,
-            "close": close_p,
-            "volume": vol
-        })
-        price = close_p
-    return data
+    import httpx
+    
+    # Format symbol for CoinDCX e.g. BTC/USDT -> B-BTC_USDT
+    market = f"B-{symbol.replace('/', '_')}"
+    
+    try:
+        async with httpx.AsyncClient() as client:
+            resp = await client.get(
+                "https://public.coindcx.com/market_data/candles",
+                params={"pair": market, "interval": interval, "limit": limit}
+            )
+            if resp.status_code == 200:
+                candles = resp.json()
+                data = []
+                for c in candles:
+                    data.append({
+                        "timestamp": c.get("time"),
+                        "open": c.get("open"),
+                        "high": c.get("high"),
+                        "low": c.get("low"),
+                        "close": c.get("close"),
+                        "volume": c.get("volume")
+                    })
+                # CoinDCX returns newest first. Let's return oldest first for charts if needed,
+                # actually charting libraries usually handle it, but typically oldest first is preferred.
+                return data[::-1]
+    except Exception as e:
+        logger.error(f"Error fetching OHLCV: {e}")
+        
+    return []
 
 @app.get("/api/config")
-async def api_get_config():
-    return await database.get_bot_config()
+async def api_get_config(request: Request):
+    config = await database.get_bot_config()
+    strategy = request.app.state.strategy_engine
+    config["bot_halted"] = getattr(strategy, 'bot_halted', False)
+    config["is_panic_selling"] = getattr(strategy, 'is_panic_selling', False)
+    return config
 
 @app.put("/api/config")
 async def api_put_config(config: dict):
@@ -306,13 +337,20 @@ async def get_indicators(symbol: str = 'BTC/USDT', type: str = 'RSI', interval: 
     return []
 
 @app.post("/api/bot/kill")
-async def kill_bot():
+async def kill_bot(request: Request):
     """
     Sets bot state to KILLED, closes all positions + stops bot.
-    (Mocked implementation for frontend wiring)
     """
-    # TODO: call Layer 5 kill switch
-    return {"status": "success", "message": "Bot killed. All positions closed."}
+    strategy = request.app.state.strategy_engine
+    strategy.bot_halted = True
+    asyncio.create_task(strategy._staggered_panic_sell())
+    
+    # Pause the bot so it doesn't immediately buy back in
+    config = await database.get_bot_config()
+    config['is_paused'] = True
+    await database.update_bot_config(config)
+    
+    return {"status": "success", "message": "Kill switch activated. Closing all positions."}
 
 @app.websocket("/ws")
 async def websocket_endpoint(websocket: WebSocket):
@@ -359,7 +397,10 @@ async def pause_bot():
     return {"status": "success", "message": "Bot paused. Will not open new positions."}
 
 @app.post("/api/bot/resume")
-async def resume_bot():
+async def resume_bot(request: Request):
+    strategy = request.app.state.strategy_engine
+    strategy.bot_halted = False
+    
     config = await database.get_bot_config()
     config['is_paused'] = False
     await database.update_bot_config(config)
