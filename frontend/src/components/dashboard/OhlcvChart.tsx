@@ -106,7 +106,7 @@ export default function OhlcvChart({ activeCoin = "BTC/USDT" }: { activeCoin?: s
           </div>
         ) : (
           <ResponsiveContainer width="100%" height="100%">
-            <ComposedChart data={chartData} margin={{ top: 10, right: 10, left: -20, bottom: 0 }}>
+            <ComposedChart data={chartData} margin={{ top: 10, right: 10, left: 10, bottom: 0 }}>
               <CartesianGrid strokeDasharray="3 3" stroke="rgba(255,255,255,0.1)" vertical={false} />
               <XAxis 
                 dataKey="time" 
@@ -119,10 +119,11 @@ export default function OhlcvChart({ activeCoin = "BTC/USDT" }: { activeCoin?: s
                 yAxisId="price"
                 orientation="left"
                 domain={[minPrice, maxPrice]}
+                width={70}
                 axisLine={false} 
                 tickLine={false} 
                 tick={{ fontSize: 12, fill: '#888' }}
-                tickFormatter={(value) => `$${value.toLocaleString()}`}
+                tickFormatter={(value) => `$${value.toLocaleString(undefined, { maximumFractionDigits: 2 })}`}
               />
               <YAxis 
                 yAxisId="volume" 

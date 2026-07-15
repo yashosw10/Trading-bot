@@ -9,8 +9,8 @@ class OrderManager:
     def __init__(self, order_queue: asyncio.Queue, broadcast_cb=None):
         self.order_queue = order_queue
         self.broadcast_cb = broadcast_cb
-        self.fee_rate = 0.001       # 0.1% fee
-        self.slippage_rate = 0.0005 # 0.05% slippage
+        self.order_queue = order_queue
+        self.broadcast_cb = broadcast_cb
 
     async def start(self, shutdown_event: asyncio.Event):
         logger.info("Starting Order Manager...")
@@ -22,6 +22,9 @@ class OrderManager:
                 config = await database.get_bot_config()
                 mode = signal.mode_override if signal.mode_override else config.get("mode", "paper")
                 
+                fee_rate = config.get("fee_rate", 0.001)
+                slippage_rate = config.get("slippage_rate", 0.0005)
+                
                 # Fetch correct fiat price
                 if signal.fiat_currency == 'USD':
                     base_price = ticker.price_usd
@@ -32,12 +35,12 @@ class OrderManager:
 
                 # Calculate slippage
                 if signal.side == 'buy':
-                    execution_price = base_price * (1 + self.slippage_rate)
+                    execution_price = base_price * (1 + slippage_rate)
                 else:
-                    execution_price = base_price * (1 - self.slippage_rate)
+                    execution_price = base_price * (1 - slippage_rate)
 
                 # Calculate fee (in fiat terms)
-                fee = (execution_price * signal.amount) * self.fee_rate
+                fee = (execution_price * signal.amount) * fee_rate
                 
                 pnl_fiat = 0.0
                 pnl_percent = 0.0
@@ -55,23 +58,9 @@ class OrderManager:
 
                 logger.info(f"Executing {signal.side.upper()} {signal.amount} {signal.symbol} at {execution_price:.2f} {signal.fiat_currency} (Fee: {fee:.2f}, PnL: {pnl_fiat:.2f})")
                 
-                # Execute in DB
-                success = await database.execute_trade(
-                    symbol=signal.symbol,
-                    side=signal.side,
-                    fiat_currency=signal.fiat_currency,
-                    amount=signal.amount,
-                    price=execution_price,
-                    fee=fee,
-                    pnl_fiat=pnl_fiat,
-                    pnl_percent=pnl_percent,
-                    mfe=signal.mfe,
-                    mae=signal.mae,
-                    mode=mode
-                )
-                
-                # If live mode, place the order on CoinDCX
-                if success and mode == 'live':
+                success = True
+                # If live mode, place the order on CoinDCX FIRST before DB
+                if mode == 'live':
                     from exchange import CoinDCXClient
                     client = CoinDCXClient()
                     # Execute market order using USD execution price mapping
@@ -82,9 +71,24 @@ class OrderManager:
                         price=execution_price
                     )
                     if not resp:
-                        logger.error(f"Failed to place {mode} order on CoinDCX!")
-                        # If live order failed, we technically should rollback the trade logging
+                        logger.error(f"Failed to place {mode} order on CoinDCX! Dropping trade to maintain DB sync.")
                         success = False
+                
+                # If the exchange order succeeded (or paper mode), log it to the database
+                if success:
+                    success = await database.execute_trade(
+                        symbol=signal.symbol,
+                        side=signal.side,
+                        fiat_currency=signal.fiat_currency,
+                        amount=signal.amount,
+                        price=execution_price,
+                        fee=fee,
+                        pnl_fiat=pnl_fiat,
+                        pnl_percent=pnl_percent,
+                        mfe=signal.mfe,
+                        mae=signal.mae,
+                        mode=mode
+                    )
                 
                 if success:
                     balance = await database.get_balance(signal.fiat_currency, mode=mode)

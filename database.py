@@ -68,6 +68,9 @@ async def init_db():
                 telegram_chat_id TEXT DEFAULT '',
                 trade_alerts_enabled BOOLEAN DEFAULT 1,
                 daily_summary_enabled BOOLEAN DEFAULT 0,
+                symbols TEXT DEFAULT 'BTC/USDT,ETH/USDT,BNB/USDT,SOL/USDT,XRP/USDT',
+                fee_rate REAL DEFAULT 0.001,
+                slippage_rate REAL DEFAULT 0.0005,
                 updated_at TEXT DEFAULT (datetime('now'))
             )
         ''')
@@ -87,6 +90,17 @@ async def init_db():
             await db.execute("ALTER TABLE bot_config ADD COLUMN daily_summary_enabled BOOLEAN DEFAULT 0")
         except Exception:
             pass
+        try:
+            await db.execute("ALTER TABLE bot_config ADD COLUMN symbols TEXT DEFAULT 'BTC/USDT,ETH/USDT,BNB/USDT,SOL/USDT,XRP/USDT'")
+        except Exception:
+            pass
+        try:
+            await db.execute("ALTER TABLE bot_config ADD COLUMN fee_rate REAL DEFAULT 0.001")
+            await db.execute("ALTER TABLE bot_config ADD COLUMN slippage_rate REAL DEFAULT 0.0005")
+        except Exception:
+            pass
+        
+        # Insert default config row if empty
         await db.execute('INSERT OR IGNORE INTO bot_config (id) VALUES (1)')
         
         await db.execute('''
@@ -134,6 +148,35 @@ async def init_db():
             )
         ''')
         
+async def insert_backtest_result(result: dict) -> bool:
+    async with aiosqlite.connect(DB_FILE) as db:
+        try:
+            await db.execute('''
+                INSERT INTO backtest_results (
+                    strategy, start_date, end_date, initial_balance, final_balance,
+                    total_return_pct, max_drawdown_pct, win_rate, profit_factor,
+                    total_trades, avg_trade_duration_hours, is_mock
+                ) VALUES (?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?)
+            ''', (
+                result.get('strategy', 'Unknown'),
+                result.get('start_date', ''),
+                result.get('end_date', ''),
+                result.get('initial_balance', 0.0),
+                result.get('final_balance', 0.0),
+                result.get('total_return_pct', 0.0),
+                result.get('max_drawdown_pct', 0.0),
+                result.get('win_rate', 0.0),
+                result.get('profit_factor', 0.0),
+                result.get('total_trades', 0),
+                result.get('avg_trade_duration_hours', 0.0),
+                int(result.get('is_mock', False))
+            ))
+            await db.commit()
+            return True
+        except Exception as e:
+            logger.error(f"Failed to insert backtest result: {e}")
+            return False
+
         try:
             await db.execute('ALTER TABLE bot_config ADD COLUMN is_paused BOOLEAN DEFAULT 0')
         except Exception:
@@ -296,7 +339,7 @@ async def execute_trade(symbol: str, side: str, fiat_currency: str, amount: floa
 
 async def get_bot_config() -> dict:
     async with aiosqlite.connect(DB_FILE) as db:
-        async with db.execute('SELECT daily_loss_limit, max_drawdown_pct, max_position_size, max_open_positions, mode, is_paused, telegram_bot_token, telegram_chat_id, trade_alerts_enabled, daily_summary_enabled, updated_at FROM bot_config WHERE id = 1') as cursor:
+        async with db.execute('SELECT daily_loss_limit, max_drawdown_pct, max_position_size, max_open_positions, mode, is_paused, telegram_bot_token, telegram_chat_id, trade_alerts_enabled, daily_summary_enabled, updated_at, symbols, fee_rate, slippage_rate FROM bot_config WHERE id = 1') as cursor:
             row = await cursor.fetchone()
             if row:
                 return {
@@ -310,7 +353,10 @@ async def get_bot_config() -> dict:
                     "telegram_chat_id": row[7],
                     "trade_alerts_enabled": bool(row[8]),
                     "daily_summary_enabled": bool(row[9]),
-                    "updated_at": row[10]
+                    "updated_at": row[10],
+                    "symbols": row[11].split(",") if len(row) > 11 and row[11] else ["BTC/USDT", "ETH/USDT", "BNB/USDT", "SOL/USDT", "XRP/USDT"],
+                    "fee_rate": row[12] if len(row) > 12 else 0.001,
+                    "slippage_rate": row[13] if len(row) > 13 else 0.0005
                 }
             return {}
 
@@ -318,11 +364,14 @@ async def update_bot_config(config: dict) -> bool:
     async with aiosqlite.connect(DB_FILE) as db:
         set_clauses = []
         values = []
-        allowed_keys = ['daily_loss_limit', 'max_drawdown_pct', 'max_position_size', 'max_open_positions', 'mode', 'is_paused', 'telegram_bot_token', 'telegram_chat_id', 'trade_alerts_enabled', 'daily_summary_enabled']
+        allowed_keys = ['daily_loss_limit', 'max_drawdown_pct', 'max_position_size', 'max_open_positions', 'mode', 'is_paused', 'telegram_bot_token', 'telegram_chat_id', 'trade_alerts_enabled', 'daily_summary_enabled', 'symbols', 'fee_rate', 'slippage_rate']
         for k, v in config.items():
             if k in allowed_keys:
                 set_clauses.append(f"{k} = ?")
-                values.append(v)
+                if k == 'symbols' and isinstance(v, list):
+                    values.append(",".join(v))
+                else:
+                    values.append(v)
         if not set_clauses:
             return False
         

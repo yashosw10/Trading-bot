@@ -7,8 +7,6 @@ import { Briefcase, ArrowUpRight } from "lucide-react";
 import { motion } from "framer-motion";
 import { useLivePrice } from "@/hooks/useLivePrice";
 
-const SYMBOLS = ["BTC/USDT", "ETH/USDT", "BNB/USDT", "SOL/USDT", "XRP/USDT"];
-
 function PositionRow({ symbol, amount, entryPrice }: { symbol: string, amount: number, entryPrice: number }) {
   const liveData = useLivePrice(symbol);
   const livePrice = liveData?.price_usd || entryPrice; // fallback to entry if loading
@@ -56,7 +54,13 @@ export default function ActivePositions() {
     queryFn: api.getPositions
   });
 
-  const activeSymbols = SYMBOLS.filter(sym => positions?.[sym] && positions[sym].amount > 0);
+  const { data: config } = useQuery({
+    queryKey: ['config'],
+    queryFn: api.getConfig
+  });
+
+  const symbols = config?.symbols || [];
+  const activeSymbols = symbols.filter(sym => positions?.[sym] && positions[sym].amount > 0);
   const hasPositions = activeSymbols.length > 0;
 
   return (

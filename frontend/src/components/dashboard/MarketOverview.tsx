@@ -1,6 +1,8 @@
 "use client";
 
 import { useLivePrice } from "@/hooks/useLivePrice";
+import { useQuery } from "@tanstack/react-query";
+import { api } from "@/lib/api";
 import { TrendingUp, TrendingDown, Activity } from "lucide-react";
 import { LineChart, Line, ResponsiveContainer, YAxis } from "recharts";
 
@@ -80,7 +82,11 @@ function CoinRow({ symbol, isActive, onClick }: CoinRowProps) {
 }
 
 export default function MarketOverview({ activeCoin, onSelect }: { activeCoin: string, onSelect: (coin: string) => void }) {
-  const COINS = ["BTC/USDT", "ETH/USDT", "BNB/USDT", "SOL/USDT", "XRP/USDT"];
+  const { data: config } = useQuery({
+    queryKey: ['config'],
+    queryFn: api.getConfig
+  });
+  const coins = config?.symbols || [];
 
   return (
     <div className="liquid-glass-card overflow-hidden">
@@ -91,7 +97,7 @@ export default function MarketOverview({ activeCoin, onSelect }: { activeCoin: s
         </h3>
       </div>
       <div className="p-3 space-y-2">
-        {COINS.map(coin => (
+        {coins.map((coin: string) => (
           <CoinRow 
             key={coin} 
             symbol={coin} 

@@ -53,6 +53,7 @@ async def lifespan(app: FastAPI):
 
     # Attach to app state so we can access them later if needed
     app.state.strategy_engine = strategy
+    app.state.streamer = streamer
     app.state.streamer_task = asyncio.create_task(streamer.start(shutdown_event))
     app.state.strategy_task = asyncio.create_task(strategy.start(shutdown_event))
     app.state.order_manager_task = asyncio.create_task(order_manager.start(shutdown_event))
@@ -113,7 +114,7 @@ async def health_check():
     return {"status": "ok"}
 
 @app.post("/api/add-funds")
-async def add_funds(req: AddFundsRequest):
+async def add_funds(req: AddFundsRequest, request: Request):
     # Add primary currency
     await database.add_balance(req.currency, req.amount)
     
@@ -140,6 +141,9 @@ async def add_funds(req: AddFundsRequest):
     if req.clear_history:
         await database.clear_history(mode=mode)
         
+    strategy = request.app.state.strategy_engine
+    strategy.starting_balance = await database.get_balance(strategy.fiat_currency, mode=mode)
+        
     return {"status": "success", "message": f"Added {req.amount} to {req.currency} balance"}
 
 @app.get("/api/balances")
@@ -164,14 +168,13 @@ async def get_balances():
         eur = await database.get_balance("EUR", mode="paper")
         return {"USD": usd, "INR": inr, "EUR": eur}
 
-SYMBOLS = ["BTC/USDT", "ETH/USDT", "BNB/USDT", "SOL/USDT", "XRP/USDT"]
-
 @app.get("/api/positions")
 async def get_positions():
     config = await database.get_bot_config()
     mode = config.get("mode", "paper")
+    symbols = config.get("symbols", [])
     positions = {}
-    for symbol in SYMBOLS:
+    for symbol in symbols:
         pos = await database.get_position(symbol, mode=mode)
         if pos and pos.get("amount", 0) > 0:
             positions[symbol] = pos
@@ -289,9 +292,21 @@ async def api_get_config(request: Request):
     return config
 
 @app.put("/api/config")
-async def api_put_config(config: dict):
+async def api_put_config(config: dict, request: Request):
+    old_config = await database.get_bot_config()
+    old_mode = old_config.get("mode", "paper")
+    
     success = await database.update_bot_config(config)
     if success:
+        new_mode = config.get("mode", old_mode)
+        if new_mode != old_mode:
+            strategy = request.app.state.strategy_engine
+            # Wipe memory of open positions for the old mode
+            strategy.states.clear()
+            # Refresh starting balance against the new mode
+            strategy.starting_balance = await database.get_balance(strategy.fiat_currency, mode=new_mode)
+            logger.info(f"Mode switched from {old_mode} to {new_mode}. Cleared strategy state memory.")
+            
         return {"status": "success"}
     return {"status": "error", "message": "Failed to update config"}
 
@@ -299,7 +314,7 @@ async def api_put_config(config: dict):
 async def get_indicators(symbol: str = 'BTC/USDT', type: str = 'RSI', interval: str = '1h'):
     import pandas as pd
     import pandas_ta as ta
-    ohlcv = get_ohlcv(symbol, interval)
+    ohlcv = await get_ohlcv(symbol, interval)
     if not ohlcv:
         return []
     
@@ -362,7 +377,7 @@ async def websocket_endpoint(websocket: WebSocket):
         manager.disconnect(websocket)
 
 @app.get("/api/health")
-async def get_health():
+async def get_health(request: Request):
     import time
     start = time.time()
     db_status = "ok"
@@ -371,6 +386,10 @@ async def get_health():
     except Exception:
         db_status = "error"
     db_latency = int((time.time() - start) * 1000)
+    
+    streamer = getattr(request.app.state, 'streamer', None)
+    exc_latency = streamer.latency_ms if streamer else 0
+    exc_status = "connected" if exc_latency > 0 else "error"
     
     return {
         "status": "healthy",
@@ -383,8 +402,8 @@ async def get_health():
             "active_clients": len(manager.active_connections) if hasattr(manager, 'active_connections') else 0
         },
         "exchange": {
-            "status": "connected",
-            "latency_ms": 45 # mock latency for exchange connection
+            "status": exc_status,
+            "latency_ms": exc_latency
         },
         "timestamp": datetime.now(timezone.utc).isoformat()
     }
@@ -435,13 +454,9 @@ class OrderRequest(BaseModel):
 async def manual_order(order: OrderRequest):
     from fastapi import HTTPException
     config = await database.get_bot_config()
-    if config.get("mode") == "live":
-        raise HTTPException(
-            status_code=503,
-            detail="Live exchange execution not yet wired. Switch to Paper mode to place manual orders."
-        )
+    mode = config.get("mode", "paper")
+    fee_rate = config.get("fee_rate", 0.001)
     
-    # Paper execution
     # Fetch current price from latest ticker or fallback to 0 (which would fail trade)
     from utils import fetch_current_price
     
@@ -454,12 +469,12 @@ async def manual_order(order: OrderRequest):
     if price_usd <= 0:
         raise HTTPException(status_code=400, detail="Could not fetch valid price for execution.")
         
-    fee = order.amount * price_usd * 0.001
+    fee = order.amount * price_usd * fee_rate
     pnl_fiat = 0.0
     pnl_percent = 0.0
     
     if order.side.lower() == 'sell':
-        pos = await database.get_position(order.symbol)
+        pos = await database.get_position(order.symbol, mode=mode)
         if pos:
             avg_price = pos.get('average_price_usd', 0)
             if avg_price > 0:
@@ -468,22 +483,59 @@ async def manual_order(order: OrderRequest):
                 pnl_fiat = sale_value - cost_basis - fee
                 pnl_percent = (pnl_fiat / cost_basis) * 100
                 
-    # Since manual order, we don't have strategy context, pass mfe=0, mae=0
-    success = await database.execute_trade(
-        symbol=order.symbol,
-        side=order.side.lower(),
-        fiat_currency="USD",
-        amount=order.amount,
-        price=price_usd,
-        fee=fee,
-        pnl_fiat=pnl_fiat,
-        pnl_percent=pnl_percent
-    )
+    success = True
     
-    if not success:
-        raise HTTPException(status_code=400, detail="Trade execution failed. Check wallet balance or position limits.")
+    # Live execution on exchange
+    if mode == "live":
+        from exchange import CoinDCXClient
+        client = CoinDCXClient()
+        resp = await client.place_order(
+            symbol=order.symbol,
+            side=order.side.lower(),
+            amount=order.amount,
+            price=price_usd,
+            order_type=order.type
+        )
+        if not resp:
+            success = False
+            raise HTTPException(status_code=500, detail="Exchange order failed to place")
+
+    if success:
+        # Since manual order, we don't have strategy context, pass mfe=0, mae=0
+        success = await database.execute_trade(
+            symbol=order.symbol,
+            side=order.side.lower(),
+            fiat_currency="USD",
+            amount=order.amount,
+            price=price_usd,
+            fee=fee,
+            pnl_fiat=pnl_fiat,
+            pnl_percent=pnl_percent,
+            mfe=0.0,
+            mae=0.0,
+            mode=mode
+        )
+        if not success:
+            raise HTTPException(status_code=400, detail="Trade execution failed. Check wallet balance or position limits.")
         
     return {"status": "success", "message": "Manual order executed.", "price": price_usd}
+
+class BacktestRequest(BaseModel):
+    symbol: str
+    interval: str = "1h"
+    limit: int = 2000
+
+@app.post("/api/backtest/run")
+async def run_backtest_endpoint(req: BacktestRequest):
+    from backtest import run_backtest
+    config = await database.get_bot_config()
+    result = await run_backtest(req.symbol, req.interval, req.limit, config)
+    if not result:
+        raise HTTPException(status_code=400, detail="Not enough data to run backtest")
+    success = await database.insert_backtest_result(result)
+    if not success:
+        raise HTTPException(status_code=500, detail="Failed to save backtest result")
+    return {"status": "success", "result": result}
 
 @app.get("/api/backtest/latest")
 async def get_latest_backtest():

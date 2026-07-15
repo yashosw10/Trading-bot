@@ -13,17 +13,21 @@ class Streamer:
         self.broadcast_cb = broadcast_cb
         
         self.rest_url = "https://api.coindcx.com/exchange/ticker"
-        self.top_5_markets = {'BTCUSDT', 'ETHUSDT', 'SOLUSDT', 'BNBUSDT', 'XRPUSDT'}
+        self.latency_ms = 0
         
         from collections import defaultdict
         self.price_history = defaultdict(list)
 
     async def fetch_coindcx_async(self, client: httpx.AsyncClient):
         try:
+            import time
+            start = time.time()
             resp = await client.get(self.rest_url)
+            self.latency_ms = int((time.time() - start) * 1000)
             return resp.status_code, resp.json()
         except Exception as e:
             logger.error(f"Error connecting to CoinDCX: {e}")
+            self.latency_ms = 0
             return 0, []
 
     async def start(self, shutdown_event: asyncio.Event):
@@ -38,13 +42,17 @@ class Streamer:
                     status, markets = await self.fetch_coindcx_async(client)
                     
                     if status == 200:
+                        config = await database.get_bot_config()
+                        symbols = config.get("symbols", [])
+                        target_markets = {s.replace("/", "") for s in symbols}
+                        
                         # Fetch dynamic FX rates from the database cache
                         usd_to_inr = await database.get_fx_rate("INR")
                         usd_to_eur = await database.get_fx_rate("EUR")
 
                         found_coins = []
                         for market in markets:
-                            if market.get('market') in self.top_5_markets:
+                            if market.get('market') in target_markets:
                                 raw_symbol = market.get('market')
                                 formatted_symbol = f"{raw_symbol[:-4]}/{raw_symbol[-4:]}" # e.g. BTC/USDT
                                 

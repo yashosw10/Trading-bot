@@ -96,26 +96,19 @@ export default function ManualOrder() {
       </div>
 
       <div className="mt-6 relative z-10">
-        {isLive ? (
-          <div className="w-full py-3 rounded-xl bg-black/5 dark:bg-white/5 flex items-center justify-center gap-2 text-sm text-neutral-500 font-semibold cursor-not-allowed">
-            <AlertTriangle className="w-4 h-4 text-amber-500" />
-            Live trading not yet connected
-          </div>
-        ) : (
-          <button
-            onClick={() => orderMutation.mutate()}
-            disabled={!isValid || orderMutation.isPending}
-            className={`w-full py-3 rounded-xl font-bold text-sm transition-all flex items-center justify-center gap-2
-              ${!isValid || orderMutation.isPending 
-                ? 'bg-black/5 dark:bg-white/5 text-neutral-400 cursor-not-allowed' 
-                : side === 'buy'
-                  ? 'bg-green-500 hover:bg-green-600 text-white shadow-lg shadow-green-500/20'
-                  : 'bg-red-500 hover:bg-red-600 text-white shadow-lg shadow-red-500/20'
-              }`}
-          >
-            {orderMutation.isPending ? "Executing..." : `EXECUTE ${side.toUpperCase()}`}
-          </button>
-        )}
+        <button
+          onClick={() => orderMutation.mutate()}
+          disabled={!isValid || orderMutation.isPending}
+          className={`w-full py-3 rounded-xl font-bold text-sm transition-all flex items-center justify-center gap-2
+            ${!isValid || orderMutation.isPending 
+              ? 'bg-black/5 dark:bg-white/5 text-neutral-400 cursor-not-allowed' 
+              : side === 'buy'
+                ? 'bg-green-500 hover:bg-green-600 text-white shadow-lg shadow-green-500/20'
+                : 'bg-red-500 hover:bg-red-600 text-white shadow-lg shadow-red-500/20'
+            }`}
+        >
+          {orderMutation.isPending ? "Executing..." : `EXECUTE ${side.toUpperCase()}`}
+        </button>
       </div>
     </div>
   );

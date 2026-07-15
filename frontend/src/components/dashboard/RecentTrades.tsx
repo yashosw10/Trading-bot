@@ -53,8 +53,8 @@ export default function RecentTrades() {
                 <th className="p-4">Amount</th>
                 <th className="p-4">Price</th>
                 <th className="p-4">Fee</th>
-                <th className="p-4 text-right">PnL (Fiat)</th>
-                <th className="p-4 text-right">PnL %</th>
+                <th className="p-4 whitespace-nowrap text-right">PnL (Fiat)</th>
+                <th className="p-4 pr-6 whitespace-nowrap text-right">PnL %</th>
               </tr>
             </thead>
             <tbody>
@@ -85,12 +85,12 @@ export default function RecentTrades() {
                   <td className="p-4 font-mono text-xs">{trade.amount.toFixed(6)}</td>
                   <td className="p-4 font-mono text-xs">${trade.price.toFixed(2)}</td>
                   <td className="p-4 font-mono text-xs text-neutral-500">{trade.fee.toFixed(2)}</td>
-                  <td className={`p-4 text-right font-bold ${
+                  <td className={`p-4 whitespace-nowrap text-right font-bold ${
                     trade.pnl_fiat > 0 ? 'text-green-500' : trade.pnl_fiat < 0 ? 'text-red-500' : 'text-neutral-500'
                   }`}>
                     {trade.pnl_fiat > 0 ? '+' : ''}{trade.pnl_fiat.toFixed(2)}
                   </td>
-                  <td className={`p-4 text-right font-bold ${
+                  <td className={`p-4 pr-6 whitespace-nowrap text-right font-bold ${
                     trade.pnl_percent > 0 ? 'text-green-500' : trade.pnl_percent < 0 ? 'text-red-500' : 'text-neutral-500'
                   }`}>
                     {trade.pnl_percent > 0 ? '+' : ''}{trade.pnl_percent.toFixed(2)}%

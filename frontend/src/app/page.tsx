@@ -12,22 +12,29 @@ import MarketOverview from "@/components/dashboard/MarketOverview";
 import FeedHealthPanel from "@/components/dashboard/FeedHealthPanel";
 import ManualOrder from "@/components/dashboard/ManualOrder";
 import type { Currency } from "@/types/api";
+import { api } from "@/lib/api";
 
 export default function Home() {
   const [currencyPref, setCurrencyPref] = useState<Currency>("USD");
   const [activeCoin, setActiveCoin] = useState("BTC/USDT");
 
+  const [coins, setCoins] = useState<string[]>([]);
+
   useEffect(() => {
     const saved = sessionStorage.getItem("activeCoin");
     if (saved) setActiveCoin(saved);
+    api.getConfig().then(cfg => {
+        if (cfg.symbols && cfg.symbols.length > 0) {
+            setCoins(cfg.symbols);
+            if (!saved) setActiveCoin(cfg.symbols[0]);
+        }
+    }).catch(console.error);
   }, []);
 
   const handleSetCoin = (coin: string) => {
     setActiveCoin(coin);
     sessionStorage.setItem("activeCoin", coin);
   };
-
-  const COINS = ["BTC/USDT", "ETH/USDT", "BNB/USDT", "SOL/USDT", "XRP/USDT"];
 
   return (
     <DashboardLayout>
@@ -70,7 +77,7 @@ export default function Home() {
           
           <div>
             <div className="flex gap-2 mb-3 overflow-x-auto pb-1 no-scrollbar">
-              {COINS.map(coin => (
+              {coins.map(coin => (
                 <button
                   key={coin}
                   onClick={() => handleSetCoin(coin)}

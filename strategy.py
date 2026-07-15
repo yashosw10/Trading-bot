@@ -300,36 +300,38 @@ class StrategyEngine:
         Each sell is staggered by PANIC_SELL_STAGGER_S to reduce slippage.
         """
         self.is_panic_selling = True
-        for mode in ['paper', 'live']:
-            positions = await database.get_all_positions(mode)
-            for pos in positions:
-                sym = pos['symbol']
-                amount = pos['amount']
-                
-                # Grab current price from active state if available, else fallback to avg price
-                st = self.states.get(sym)
-                price = st.raw_prices[-1] if st and st.raw_prices else pos['average_price_usd']
-                
-                logger.critical(f"PANIC SELL {sym} ({mode.upper()}) | {amount:.6f} @ {price:.4f}")
-                fake_ticker = TickerData(
-                    symbol=sym, price_usd=price,
-                    price_inr=0, price_eur=0, price_change_percent=0,
-                    timestamp=datetime.now(timezone.utc)
-                )
-                
-                mfe = (st.price_high - st.avg_entry) / st.avg_entry * 100 if st and st.avg_entry > 0 else 0.0
-                mae = (st.avg_entry - st.price_low) / st.avg_entry * 100 if st and st.avg_entry > 0 else 0.0
-                
-                await self.order_queue.put((
-                    TradeSignal(symbol=sym, side='sell',
-                                fiat_currency=self.fiat_currency, amount=amount,
-                                mfe=mfe, mae=mae, mode_override=mode),
-                    fake_ticker
-                ))
-                if st:
-                    st.position_amount = 0.0
-                    st.total_invested  = 0.0
-                await asyncio.sleep(PANIC_SELL_STAGGER_S)
+        config = await database.get_bot_config()
+        active_mode = config.get("mode", "paper")
+        
+        positions = await database.get_all_positions(active_mode)
+        for pos in positions:
+            sym = pos['symbol']
+            amount = pos['amount']
+            
+            # Grab current price from active state if available, else fallback to avg price
+            st = self.states.get(sym)
+            price = st.raw_prices[-1] if st and st.raw_prices else pos['average_price_usd']
+            
+            logger.critical(f"PANIC SELL {sym} ({active_mode.upper()}) | {amount:.6f} @ {price:.4f}")
+            fake_ticker = TickerData(
+                symbol=sym, price_usd=price,
+                price_inr=0, price_eur=0, price_change_percent=0,
+                timestamp=datetime.now(timezone.utc)
+            )
+            
+            mfe = (st.price_high - st.avg_entry) / st.avg_entry * 100 if st and st.avg_entry > 0 else 0.0
+            mae = (st.avg_entry - st.price_low) / st.avg_entry * 100 if st and st.avg_entry > 0 else 0.0
+            
+            await self.order_queue.put((
+                TradeSignal(symbol=sym, side='sell',
+                            fiat_currency=self.fiat_currency, amount=amount,
+                            mfe=mfe, mae=mae, mode_override=active_mode),
+                fake_ticker
+            ))
+            if st:
+                st.position_amount = 0.0
+                st.total_invested  = 0.0
+            await asyncio.sleep(PANIC_SELL_STAGGER_S)
         self.is_panic_selling = False
 
     # ══════════════════════════════════════════
@@ -339,9 +341,11 @@ class StrategyEngine:
     async def start(self, shutdown_event: asyncio.Event):
         logger.info("Starting Volatility-Adjusted DCA Hybrid Engine (v3 — merged)...")
 
-        self.starting_balance = await database.get_balance(self.fiat_currency)
+        config = await database.get_bot_config()
+        active_mode = config.get("mode", "paper")
+        self.starting_balance = await database.get_balance(self.fiat_currency, mode=active_mode)
         logger.info(
-            f"Starting balance : ${self.starting_balance:.2f}  |  "
+            f"Starting balance ({active_mode.upper()}) : ${self.starting_balance:.2f}  |  "
             f"Global kill switch : −{GLOBAL_KILL_PCT*100:.0f}%  "
             f"(−${self.starting_balance * GLOBAL_KILL_PCT:.2f})  |  "
             f"Per-trade SL : −{PER_TRADE_STOP_PCT*100:.0f}%"
