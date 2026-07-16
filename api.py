@@ -109,14 +109,8 @@ class AddFundsRequest(BaseModel):
     amount: float
     clear_history: bool = False
 
-@app.get("/api/health")
-async def health_check():
-    return {"status": "ok"}
-
 @app.post("/api/add-funds")
 async def add_funds(req: AddFundsRequest, request: Request):
-    # Add primary currency
-    await database.add_balance(req.currency, req.amount)
     
     # Sync other currencies
     config = await database.get_bot_config()
@@ -345,9 +339,8 @@ async def get_indicators(symbol: str = 'BTC/USDT', type: str = 'RSI', interval: 
         
     elif type.upper() == 'BOLLINGER':
         df.ta.bbands(append=True)
-        # BBL_5_2.0, BBM_5_2.0, BBU_5_2.0
-        df = df.dropna(subset=['BBL_5_2.0'])
-        return [{"timestamp": row['timestamp'], "lower": row['BBL_5_2.0'], "middle": row['BBM_5_2.0'], "upper": row['BBU_5_2.0']} for _, row in df.iterrows()]
+        df = df.dropna(subset=['BBL_5_2.0_2.0'])
+        return [{"timestamp": row['timestamp'], "lower": row['BBL_5_2.0_2.0'], "middle": row['BBM_5_2.0_2.0'], "upper": row['BBU_5_2.0_2.0']} for _, row in df.iterrows()]
     
     return []
 

@@ -313,9 +313,12 @@ class StrategyEngine:
             price = st.raw_prices[-1] if st and st.raw_prices else pos['average_price_usd']
             
             logger.critical(f"PANIC SELL {sym} ({active_mode.upper()}) | {amount:.6f} @ {price:.4f}")
+            usd_to_inr = await database.get_fx_rate("INR")
+            usd_to_eur = await database.get_fx_rate("EUR")
+            
             fake_ticker = TickerData(
                 symbol=sym, price_usd=price,
-                price_inr=0, price_eur=0, price_change_percent=0,
+                price_inr=price * usd_to_inr, price_eur=price * usd_to_eur, price_change_percent=0,
                 timestamp=datetime.now(timezone.utc)
             )
             
@@ -344,10 +347,13 @@ class StrategyEngine:
         config = await database.get_bot_config()
         active_mode = config.get("mode", "paper")
         self.starting_balance = await database.get_balance(self.fiat_currency, mode=active_mode)
+        
+        global_kill_pct = config.get("daily_loss_limit", 15.0) / 100.0
+        
         logger.info(
             f"Starting balance ({active_mode.upper()}) : ${self.starting_balance:.2f}  |  "
-            f"Global kill switch : −{GLOBAL_KILL_PCT*100:.0f}%  "
-            f"(−${self.starting_balance * GLOBAL_KILL_PCT:.2f})  |  "
+            f"Global kill switch : −{global_kill_pct*100:.0f}%  "
+            f"(−${self.starting_balance * global_kill_pct:.2f})  |  "
             f"Per-trade SL : −{PER_TRADE_STOP_PCT*100:.0f}%"
         )
 
@@ -356,6 +362,12 @@ class StrategyEngine:
                 config = await database.get_bot_config()
                 global_kill_pct = config.get("daily_loss_limit", 15.0) / 100.0
                 is_paused = config.get("is_paused", False)
+                
+                # Dynamic parameters
+                base_order = float(config.get("base_order", BASE_ORDER))
+                volume_multiplier = float(config.get("volume_multiplier", VOLUME_MULTIPLIER))
+                per_trade_stop_pct = float(config.get("per_trade_stop_pct", PER_TRADE_STOP_PCT * 100)) / 100.0
+                max_dca_layers = int(config.get("max_dca_layers", MAX_DCA_LAYERS))
                 
                 ticker: TickerData = await asyncio.wait_for(
                     self.data_queue.get(), timeout=1.0
@@ -450,10 +462,10 @@ class StrategyEngine:
                 #  RISK LAYER 3 — Per-symbol stop-loss  (−8 % from avg entry)
                 # ════════════════════════════════════════════════════
                 if (st.dca_layer > 0 and st.avg_entry > 0 and
-                        price < st.avg_entry * (1 - PER_TRADE_STOP_PCT)):
+                        price < st.avg_entry * (1 - per_trade_stop_pct)):
                     logger.warning(
-                        f"STOP-LOSS {symbol} | price {price:.4f} < "
-                        f"stop {st.avg_entry * (1 - PER_TRADE_STOP_PCT):.4f}"
+                        f"STOP LOSS {symbol} | drop >{per_trade_stop_pct*100:.0f}% from avg entry | "
+                        f"stop {st.avg_entry * (1 - per_trade_stop_pct):.4f}"
                     )
                     await self._place_sell(symbol, st.position_amount, price, ticker, "STOP-LOSS")
                     self._reset_position(symbol, cooldown=True)
@@ -487,7 +499,7 @@ class StrategyEngine:
                         self.data_queue.task_done()
                         continue
 
-                    await self._place_buy(symbol, BASE_ORDER, price, ticker, "Base Order")
+                    await self._place_buy(symbol, base_order, price, ticker, "Base Order")
                     st.entry_grid = grid   # lock grid at entry for all TP maths
 
                 # ════════════════════════════════════════════════════
@@ -496,11 +508,11 @@ class StrategyEngine:
                 # ════════════════════════════════════════════════════
                 elif (st.tp1_done is False and
                       price < st.last_buy_price * (1 - grid)):
-                    if st.dca_layer >= MAX_DCA_LAYERS:
-                        logger.warning(f"{symbol}: DCA cap ({MAX_DCA_LAYERS}) reached — holding.")
+                    if st.dca_layer >= max_dca_layers:
+                        logger.warning(f"{symbol}: DCA cap ({max_dca_layers}) reached — holding.")
                     elif self._passes_dca_gate(symbol):
                         n = st.dca_layer
-                        amount_fiat = BASE_ORDER * (VOLUME_MULTIPLIER ** n)
+                        amount_fiat = base_order * (volume_multiplier ** n)
                         await self._place_buy(symbol, amount_fiat, price, ticker, f"DCA Layer {n + 1}")
 
                 # ════════════════════════════════════════════════════
