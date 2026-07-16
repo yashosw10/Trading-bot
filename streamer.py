@@ -17,6 +17,7 @@ class Streamer:
         
         from collections import defaultdict
         self.price_history = defaultdict(list)
+        self.market_map = {}
 
     async def fetch_coindcx_async(self, client: httpx.AsyncClient):
         try:
@@ -36,15 +37,35 @@ class Streamer:
         # Start a background task for real orderbook publishing
         asyncio.create_task(self._publish_orderbooks(shutdown_event))
         
+        backoff_time = 5.0
+        
         async with httpx.AsyncClient(timeout=10.0, headers={'User-Agent': 'Mozilla/5.0'}) as client:
             while not shutdown_event.is_set():
                 try:
                     status, markets = await self.fetch_coindcx_async(client)
                     
                     if status == 200:
+                        backoff_time = 5.0
                         config = await database.get_bot_config()
                         symbols = config.get("symbols", [])
-                        target_markets = {s.replace("/", "") for s in symbols}
+                        if not self.market_map:
+                            try:
+                                mr_resp = await client.get("https://api.coindcx.com/exchange/v1/markets_details")
+                                if mr_resp.status_code == 200:
+                                    mr_data = mr_resp.json()
+                                    for m in mr_data:
+                                        target = m.get('target_currency_short_name', '')
+                                        base = m.get('base_currency_short_name', '')
+                                        self.market_map[m.get("coindcx_name")] = {
+                                            "symbol": f"{target}/{base}",
+                                            "pair": m.get("pair")
+                                        }
+                            except Exception as e:
+                                logger.error(f"Error fetching market details in streamer: {e}")
+                                
+                        target_raw_markets = {name for name, info in self.market_map.items() if info["symbol"] in symbols}
+                        if not target_raw_markets:
+                            target_raw_markets = {s.replace("/", "") for s in symbols}
                         
                         # Fetch dynamic FX rates from the database cache
                         usd_to_inr = await database.get_fx_rate("INR")
@@ -52,9 +73,12 @@ class Streamer:
 
                         found_coins = []
                         for market in markets:
-                            if market.get('market') in target_markets:
-                                raw_symbol = market.get('market')
-                                formatted_symbol = f"{raw_symbol[:-4]}/{raw_symbol[-4:]}" # e.g. BTC/USDT
+                            raw_symbol = market.get('market')
+                            if raw_symbol in target_raw_markets:
+                                if raw_symbol in self.market_map:
+                                    formatted_symbol = self.market_map[raw_symbol]["symbol"]
+                                else:
+                                    formatted_symbol = f"{raw_symbol[:-4]}/{raw_symbol[-4:]}"
                                 
                                 price_usd = float(market.get('last_price', 0) or 0)
                                 price_inr = price_usd * usd_to_inr
@@ -85,16 +109,17 @@ class Streamer:
                         logger.debug("Successfully polled CoinDCX Top 5 prices.")
                         self.last_coins_data = found_coins
                     elif status == 429:
-                        logger.warning("CoinDCX rate limit hit (429). Pausing for 30 seconds...")
-                        await asyncio.sleep(30)
+                        backoff_time = min(backoff_time * 2, 60.0)
+                        logger.warning(f"CoinDCX rate limit hit (429). Backing off for {backoff_time}s...")
                     else:
-                        logger.warning(f"CoinDCX API returned status {status}")
+                        backoff_time = min(backoff_time * 2, 60.0)
+                        logger.warning(f"CoinDCX API returned status {status}. Backing off for {backoff_time}s...")
                 except Exception as fetch_e:
-                    logger.error(f"CoinDCX API fetch error: {fetch_e}")
+                    backoff_time = min(backoff_time * 2, 60.0)
+                    logger.error(f"CoinDCX API fetch error: {fetch_e}. Backing off for {backoff_time}s...")
                 
-                # Wait 5 seconds before polling again to respect rate limits
                 try:
-                    await asyncio.wait_for(shutdown_event.wait(), timeout=5.0)
+                    await asyncio.wait_for(shutdown_event.wait(), timeout=backoff_time)
                 except asyncio.TimeoutError:
                     pass
                     
@@ -106,11 +131,14 @@ class Streamer:
                 if hasattr(self, 'last_coins_data') and self.last_coins_data and self.broadcast_cb:
                     for market in self.last_coins_data:
                         raw_symbol = market.get('market')
-                        formatted_symbol = f"{raw_symbol[:-4]}/{raw_symbol[-4:]}"
-                        
-                        base = raw_symbol[:-4]
-                        quote = raw_symbol[-4:]
-                        orderbook_pair = f"B-{base}_{quote}"
+                        if raw_symbol in getattr(self, 'market_map', {}):
+                            formatted_symbol = self.market_map[raw_symbol]["symbol"]
+                            orderbook_pair = self.market_map[raw_symbol]["pair"]
+                        else:
+                            formatted_symbol = f"{raw_symbol[:-4]}/{raw_symbol[-4:]}"
+                            base = raw_symbol[:-4]
+                            quote = raw_symbol[-4:]
+                            orderbook_pair = f"B-{base}_{quote}"
                         
                         try:
                             # Fetch real orderbook

@@ -4,7 +4,8 @@ import { useQuery } from "@tanstack/react-query";
 import { AreaChart, Area, XAxis, YAxis, Tooltip, ResponsiveContainer, CartesianGrid, ReferenceLine } from "recharts";
 import { Layers } from "lucide-react";
 import React, { useState, useEffect, useMemo, useRef } from "react";
-import { WS_URL } from "@/lib/api";
+import { api, WS_URL } from "@/lib/api";
+import { wsManager } from "@/lib/ws";
 
 const OrderBookDepthComponent = ({ symbol = "BTC/USDT" }: { symbol?: string }) => {
   const [bids, setBids] = useState<{ price: number; qty: number }[]>([]);
@@ -15,39 +16,29 @@ const OrderBookDepthComponent = ({ symbol = "BTC/USDT" }: { symbol?: string }) =
   useEffect(() => {
     setBids([]);
     setAsks([]);
-    const ws = new WebSocket(WS_URL);
     
-    ws.onopen = () => {
-      ws.send(JSON.stringify({ type: "subscribe", channel: "orderbook", symbol }));
-    };
+    wsManager.sendMessage({ type: "subscribe", channel: "orderbook", symbol });
 
-    ws.onmessage = (event) => {
-      try {
-        const data = JSON.parse(event.data);
-        if (data.type === "orderbook" && data.symbol === symbol) {
-          const now = Date.now();
-          if (now - lastUpdateRef.current >= 500) {
-            lastUpdateRef.current = now;
-            
-            const newBids = data.bids.map((b: any) => ({ price: b[0], qty: b[1] }));
-            const newAsks = data.asks.map((a: any) => ({ price: a[0], qty: a[1] }));
-            
-            setBids(newBids);
-            setAsks(newAsks);
-            
-            if (newBids.length > 0 && newAsks.length > 0) {
-              setMidPrice((newBids[0].price + newAsks[0].price) / 2);
-            }
+    const unsubscribe = wsManager.subscribe((data) => {
+      if (data.type === "orderbook" && data.symbol === symbol) {
+        const now = Date.now();
+        if (now - lastUpdateRef.current >= 500) {
+          lastUpdateRef.current = now;
+          
+          const newBids = data.bids.map((b: any) => ({ price: b[0], qty: b[1] }));
+          const newAsks = data.asks.map((a: any) => ({ price: a[0], qty: a[1] }));
+          
+          setBids(newBids);
+          setAsks(newAsks);
+          
+          if (newBids.length > 0 && newAsks.length > 0) {
+            setMidPrice((newBids[0].price + newAsks[0].price) / 2);
           }
         }
-      } catch (e) {
-        // ignore parsing errors
       }
-    };
+    });
 
-    return () => {
-      ws.close();
-    };
+    return unsubscribe;
   }, [symbol]);
 
   const chartData = useMemo(() => {

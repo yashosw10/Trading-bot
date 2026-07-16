@@ -31,7 +31,9 @@ async def daily_summary_loop(shutdown_event: asyncio.Event):
 
 @asynccontextmanager
 async def lifespan(app: FastAPI):
-    logger.add("bot.log", rotation="10 MB")
+    import os
+    os.makedirs("logs", exist_ok=True)
+    logger.add("logs/bot.log", rotation="10 MB", retention="5 days", level="INFO")
     logger.info("Initializing Crypto Paper Trading Bot with FastAPI Lifespan...")
     
     await database.init_db()
@@ -73,13 +75,44 @@ async def lifespan(app: FastAPI):
 
 app = FastAPI(title="Trading Bot API", lifespan=lifespan)
 
+import os
+
 app.add_middleware(
     CORSMiddleware,
-    allow_origins=["*"],
+    allow_origins=os.environ.get("CORS_ORIGINS", "http://localhost:3000,http://127.0.0.1:3000").split(","),
     allow_credentials=True,
     allow_methods=["*"],
     allow_headers=["*"],
 )
+
+@app.middleware("http")
+async def check_api_key(request: Request, call_next):
+    if request.url.path.startswith("/api/") and request.url.path not in ["/api/health", "/api/ws-ticket"]:
+        api_key = request.headers.get("X-API-Key")
+        expected_key = os.environ.get("API_KEY")
+        if not expected_key or not api_key or api_key != expected_key:
+            from fastapi.responses import JSONResponse
+            logger.warning(f"Unauthorized access attempt to {request.url.path} from {request.client.host}")
+            return JSONResponse(status_code=403, content={"detail": "Unauthorized"})
+    
+    logger.info(f"API Request: {request.method} {request.url.path} from {request.client.host}")
+    response = await call_next(request)
+    logger.info(f"API Response: {request.method} {request.url.path} - Status: {response.status_code}")
+    return response
+
+ws_tickets = set()
+
+@app.get("/api/ws-ticket")
+async def get_ws_ticket():
+    import uuid
+    ticket = str(uuid.uuid4())
+    ws_tickets.add(ticket)
+    # Simple cleanup to prevent unbounded growth, keep only latest 100 tickets
+    if len(ws_tickets) > 100:
+        ws_tickets.clear()
+        ws_tickets.add(ticket)
+    return {"ticket": ticket}
+
 
 class ConnectionManager:
     def __init__(self):
@@ -111,7 +144,14 @@ class AddFundsRequest(BaseModel):
 
 @app.post("/api/add-funds")
 async def add_funds(req: AddFundsRequest, request: Request):
-    
+    from fastapi import HTTPException
+    import math
+    if math.isnan(req.amount) or math.isinf(req.amount) or req.amount <= 0 or req.amount > 1_000_000_000:
+        raise HTTPException(status_code=400, detail="Invalid amount")
+        
+    if req.currency not in ['USD', 'INR', 'EUR']:
+        raise HTTPException(status_code=400, detail="Invalid currency")
+        
     # Sync other currencies
     config = await database.get_bot_config()
     mode = config.get("mode", "paper")
@@ -127,10 +167,12 @@ async def add_funds(req: AddFundsRequest, request: Request):
         usd_amount = req.amount / usd_to_inr
         await database.add_balance('USD', usd_amount, mode=mode)
         await database.add_balance('EUR', usd_amount * usd_to_eur, mode=mode)
+        await database.add_balance('INR', req.amount, mode=mode)
     elif req.currency == 'EUR':
         usd_amount = req.amount / usd_to_eur
         await database.add_balance('USD', usd_amount, mode=mode)
         await database.add_balance('INR', usd_amount * usd_to_inr, mode=mode)
+        await database.add_balance('EUR', req.amount, mode=mode)
 
     if req.clear_history:
         await database.clear_history(mode=mode)
@@ -283,12 +325,26 @@ async def api_get_config(request: Request):
     strategy = request.app.state.strategy_engine
     config["bot_halted"] = getattr(strategy, 'bot_halted', False)
     config["is_panic_selling"] = getattr(strategy, 'is_panic_selling', False)
+    config["starting_balance"] = getattr(strategy, 'starting_balance', 10000)
+    
+    # Mask telegram token
+    if config.get("telegram_bot_token"):
+        token = config["telegram_bot_token"]
+        if len(token) > 8:
+            config["telegram_bot_token"] = f"{token[:4]}***{token[-4:]}"
+        else:
+            config["telegram_bot_token"] = "***"
+            
     return config
 
 @app.put("/api/config")
 async def api_put_config(config: dict, request: Request):
     old_config = await database.get_bot_config()
     old_mode = old_config.get("mode", "paper")
+    
+    # Prevent saving masked token
+    if config.get("telegram_bot_token") and "***" in config["telegram_bot_token"]:
+        config["telegram_bot_token"] = old_config.get("telegram_bot_token", "")
     
     success = await database.update_bot_config(config)
     if success:
@@ -362,6 +418,11 @@ async def kill_bot(request: Request):
 
 @app.websocket("/ws")
 async def websocket_endpoint(websocket: WebSocket):
+    ticket = websocket.query_params.get("ticket")
+    if ticket not in ws_tickets:
+        await websocket.close(code=1008)
+        return
+    ws_tickets.remove(ticket)
     await manager.connect(websocket)
     try:
         while True:
@@ -384,8 +445,14 @@ async def get_health(request: Request):
     exc_latency = streamer.latency_ms if streamer else 0
     exc_status = "connected" if exc_latency > 0 else "error"
     
+    strategy_task = getattr(request.app.state, 'strategy_task', None)
+    strategy_status = "stopped" if (not strategy_task or strategy_task.done()) else "running"
+
+    # Overall status
+    is_healthy = db_status == "ok" and exc_status == "connected" and strategy_status == "running"
+    
     return {
-        "status": "healthy",
+        "status": "healthy" if is_healthy else "degraded",
         "database": {
             "status": db_status,
             "latency_ms": db_latency
@@ -397,6 +464,9 @@ async def get_health(request: Request):
         "exchange": {
             "status": exc_status,
             "latency_ms": exc_latency
+        },
+        "strategy": {
+            "status": strategy_status
         },
         "timestamp": datetime.now(timezone.utc).isoformat()
     }
@@ -446,6 +516,19 @@ class OrderRequest(BaseModel):
 @app.post("/api/orders")
 async def manual_order(order: OrderRequest):
     from fastapi import HTTPException
+    import math
+    
+    if math.isnan(order.amount) or math.isinf(order.amount) or order.amount <= 0 or order.amount > 1_000_000_000:
+        raise HTTPException(status_code=400, detail="Invalid amount")
+        
+    if order.side.lower() not in ['buy', 'sell']:
+        raise HTTPException(status_code=400, detail="Side must be 'buy' or 'sell'")
+        
+    config = await database.get_bot_config()
+    allowed_symbols = config.get("symbols", "BTC/USDT,ETH/USDT,BNB/USDT").split(",")
+    if order.symbol not in allowed_symbols:
+        raise HTTPException(status_code=400, detail=f"Symbol {order.symbol} is not in the allowed watchlist")
+        
     config = await database.get_bot_config()
     mode = config.get("mode", "paper")
     fee_rate = config.get("fee_rate", 0.001)
@@ -536,7 +619,7 @@ async def get_latest_backtest():
     import aiosqlite
     async with aiosqlite.connect(database.DB_FILE) as db:
         db.row_factory = aiosqlite.Row
-        async with db.execute('SELECT * FROM backtest_results ORDER BY timestamp DESC LIMIT 1') as cur:
+        async with db.execute('SELECT * FROM backtest_results WHERE is_mock = 0 ORDER BY timestamp DESC LIMIT 1') as cur:
             row = await cur.fetchone()
             if not row:
                 raise HTTPException(status_code=404, detail="No backtest results found")

@@ -7,13 +7,18 @@ import { AreaChart, Area, XAxis, YAxis, Tooltip, ResponsiveContainer, CartesianG
 import { TrendingDown } from "lucide-react";
 import { useMemo } from "react";
 
-const INITIAL_BALANCE = 10000;
-
 export default function DrawdownChart() {
+  const { data: config } = useQuery({
+    queryKey: QUERY_KEYS.config,
+    queryFn: api.getConfig
+  });
+
   const { data: trades, isLoading } = useQuery({
     queryKey: QUERY_KEYS.trades,
     queryFn: api.getTrades
   });
+
+  const INITIAL_BALANCE = config?.starting_balance || 10000;
 
   const chartData = useMemo(() => {
     if (!trades || trades.length === 0) return [];

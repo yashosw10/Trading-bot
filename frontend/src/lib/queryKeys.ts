@@ -4,4 +4,5 @@ export const QUERY_KEYS = {
   totalProfit: (currency: string) => ['totalProfit', currency] as const,
   invested: ['invested'] as const,
   trades: ['trades'] as const,
+  config: ['config'] as const,
 };

@@ -5,7 +5,8 @@ import { useGlobalStore } from "@/store/globalStore";
 import { AlertTriangle, BellRing } from "lucide-react";
 import { useAlertsStore } from "@/store/alertsStore";
 import toast from "react-hot-toast";
-import { WS_URL } from "@/lib/api";
+import { api, WS_URL } from "@/lib/api";
+import { wsManager } from "@/lib/ws";
 
 // Helper for price alert toasts
 const alertToast = (msg: string) => {
@@ -42,52 +43,43 @@ export default function GlobalAlerts() {
   const { bannerMessage, setBannerMessage } = useGlobalStore();
 
   useEffect(() => {
-    const ws = new WebSocket(WS_URL);
-    
-    ws.onmessage = (event) => {
-      try {
-        const data = JSON.parse(event.data);
-        if (data.type === "alert" && data.level === "critical" && data.message?.includes("loss limit")) {
-          setBannerMessage(data.message);
-        }
-        
-        // Check price alerts
-        if (data.type === "ticker" || data.symbol) {
-          const price = parseFloat(data.price_usd);
-          if (!isNaN(price) && data.symbol) {
-            const { alerts, markTriggered } = useAlertsStore.getState();
-            alerts.forEach(alert => {
-              if (!alert.triggered && alert.symbol === data.symbol) {
-                let msg = "";
-                if (alert.condition === 'above' && price > alert.threshold) {
-                  msg = `Price Alert: ${alert.symbol} went above $${alert.threshold}!`;
-                } else if (alert.condition === 'below' && price < alert.threshold) {
-                  msg = `Price Alert: ${alert.symbol} went below $${alert.threshold}!`;
-                }
+    const unsubscribe = wsManager.subscribe((data) => {
+      if (data.type === "alert" && data.level === "critical" && data.message?.includes("loss limit")) {
+        setBannerMessage(data.message);
+      }
+      
+      // Check price alerts
+      if (data.type === "ticker" || data.symbol) {
+        const price = parseFloat(data.price_usd);
+        if (!isNaN(price) && data.symbol) {
+          const { alerts, markTriggered } = useAlertsStore.getState();
+          alerts.forEach(alert => {
+            if (!alert.triggered && alert.symbol === data.symbol) {
+              let msg = "";
+              if (alert.condition === 'above' && price > alert.threshold) {
+                msg = `Price Alert: ${alert.symbol} went above $${alert.threshold}!`;
+              } else if (alert.condition === 'below' && price < alert.threshold) {
+                msg = `Price Alert: ${alert.symbol} went below $${alert.threshold}!`;
+              }
+              
+              if (msg) {
+                markTriggered(alert.id, msg);
+                alertToast(msg);
                 
-                if (msg) {
-                  markTriggered(alert.id, msg);
-                  alertToast(msg);
-                  
-                  const canPush = 'Notification' in window && 
-                                  (location.protocol === 'https:' || location.hostname === 'localhost');
-                  
-                  if (canPush && Notification.permission === 'granted') {
-                    new Notification('Price Alert', { body: msg, icon: '/favicon.ico' });
-                  }
+                const canPush = 'Notification' in window && 
+                                (location.protocol === 'https:' || location.hostname === 'localhost');
+                
+                if (canPush && Notification.permission === 'granted') {
+                  new Notification('Price Alert', { body: msg, icon: '/favicon.ico' });
                 }
               }
-            });
-          }
+            }
+          });
         }
-      } catch (e) {
-        // ignore
       }
-    };
+    });
 
-    return () => {
-      ws.close();
-    };
+    return unsubscribe;
   }, [setBannerMessage]);
 
   if (!bannerMessage) return null;

@@ -11,6 +11,29 @@ class CoinDCXClient:
         self.api_key = os.getenv('COINDCX_API_KEY')
         self.api_secret = os.getenv('COINDCX_API_SECRET')
         self.base_url = "https://api.coindcx.com"
+        self._market_details = {}
+
+    async def _fetch_market_details(self):
+        if self._market_details:
+            return
+        async with httpx.AsyncClient() as client:
+            try:
+                resp = await client.get(f"{self.base_url}/exchange/v1/markets_details")
+                if resp.status_code == 200:
+                    data = resp.json()
+                    for m in data:
+                        # Map base_target string (e.g. BTCUSDT) to its details
+                        target = m.get('target_currency_short_name', '')
+                        base = m.get('base_currency_short_name', '')
+                        symbol = f"{target}{base}"
+                        self._market_details[symbol] = {
+                            "coindcx_name": m.get("coindcx_name"),
+                            "target_precision": m.get("target_currency_precision", 8),
+                            "base_precision": m.get("base_currency_precision", 2),
+                            "step": m.get("step", 0.00001)
+                        }
+            except Exception as e:
+                logger.error(f"Error fetching market details: {e}")
 
     def _generate_headers(self, body):
         secret_bytes = bytes(self.api_secret, encoding='utf8')
@@ -48,9 +71,22 @@ class CoinDCXClient:
             logger.error("CoinDCX API keys missing in .env")
             return None
             
-        # Format symbol for CoinDCX e.g. BTC/USDT -> BTCUSDT
-        market = symbol.replace("/", "")
+        await self._fetch_market_details()
         
+        # Format symbol for CoinDCX e.g. BTC/USDT -> BTCUSDT
+        raw_symbol = symbol.replace("/", "")
+        
+        market_info = self._market_details.get(raw_symbol)
+        if market_info:
+            market = market_info["coindcx_name"]
+            # Round amount to target_precision (e.g. 5 decimal places)
+            amount = round(amount, market_info["target_precision"])
+            price = round(price, market_info["base_precision"])
+        else:
+            market = raw_symbol
+            amount = round(amount, 8)
+            price = round(price, 2)
+            
         body = {
             "side": side.lower(),
             "order_type": order_type.lower(),

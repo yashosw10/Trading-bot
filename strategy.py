@@ -157,6 +157,41 @@ class SymbolState:
         self.flash_crash_count: int        = 0
         self.flash_crash_window_start: float = 0.0
 
+    def to_dict(self):
+        return {
+            "position_amount": self.position_amount,
+            "total_invested": self.total_invested,
+            "dca_layer": self.dca_layer,
+            "avg_entry": self.avg_entry,
+            "last_buy_price": self.last_buy_price,
+            "entry_grid": self.entry_grid,
+            "price_high": self.price_high,
+            "price_low": self.price_low,
+            "tp1_done": self.tp1_done,
+            "tp2_done": self.tp2_done,
+            "trail_high": self.trail_high,
+            "reentry_until": self.reentry_until,
+            "blacklist_until": self.blacklist_until,
+            "flash_crash_count": self.flash_crash_count,
+            "flash_crash_window_start": self.flash_crash_window_start
+        }
+
+    def from_dict(self, data: dict):
+        self.position_amount = data.get("position_amount", 0.0)
+        self.total_invested = data.get("total_invested", 0.0)
+        self.dca_layer = data.get("dca_layer", 0)
+        self.avg_entry = data.get("avg_entry", 0.0)
+        self.last_buy_price = data.get("last_buy_price", 0.0)
+        self.entry_grid = data.get("entry_grid", 0.0)
+        self.price_high = data.get("price_high", 0.0)
+        self.price_low = data.get("price_low", 0.0)
+        self.tp1_done = data.get("tp1_done", False)
+        self.tp2_done = data.get("tp2_done", False)
+        self.trail_high = data.get("trail_high", 0.0)
+        self.reentry_until = data.get("reentry_until", 0.0)
+        self.blacklist_until = data.get("blacklist_until", 0.0)
+        self.flash_crash_count = data.get("flash_crash_count", 0)
+        self.flash_crash_window_start = data.get("flash_crash_window_start", 0.0)
 
 # ─────────────────────────────────────────────
 #  Strategy engine
@@ -176,6 +211,11 @@ class StrategyEngine:
     # ══════════════════════════════════════════
     #  Internal helpers
     # ══════════════════════════════════════════
+
+    async def _persist_state(self, symbol: str):
+        state = self.states[symbol]
+        import json
+        await database.upsert_strategy_state(symbol, json.dumps(state.to_dict()))
 
     def _active_positions(self) -> int:
         return sum(1 for s in self.states.values() if s.dca_layer > 0)
@@ -242,19 +282,18 @@ class StrategyEngine:
             ticker
         ))
         st = self.states[symbol]
-        st.position_amount += amount_crypto
-        st.total_invested  += amount_fiat
         st.last_buy_price   = price
-        st.avg_entry        = st.total_invested / st.position_amount
         if st.dca_layer == 0:
             st.price_high = price
             st.price_low = price
+            st.entry_grid = self._grid_spacing(symbol)
         else:
             st.price_high = max(st.price_high, price)
             st.price_low = min(st.price_low, price)
             
         st.dca_layer       += 1
         st.trail_high       = max(st.trail_high, price)
+        await self._persist_state(symbol)
 
     async def _place_sell(self, symbol: str, amount_crypto: float,
                           price: float, ticker: TickerData, label: str):
@@ -273,14 +312,10 @@ class StrategyEngine:
             ticker
         ))
         
-        fraction           = amount_crypto / st.position_amount if st.position_amount > 0 else 1.0
-        st.total_invested  -= st.total_invested * fraction
-        st.position_amount -= amount_crypto
+        await self._persist_state(symbol)
 
     def _reset_position(self, symbol: str, cooldown: bool = True):
         st = self.states[symbol]
-        st.position_amount = 0.0
-        st.total_invested  = 0.0
         st.dca_layer       = 0
         st.avg_entry       = 0.0
         st.last_buy_price  = 0.0
@@ -293,6 +328,7 @@ class StrategyEngine:
         if cooldown:
             st.reentry_until = datetime.now(timezone.utc).timestamp() + REENTRY_COOLDOWN_S
             logger.info(f"{symbol}: {REENTRY_COOLDOWN_S}s re-entry cooldown started.")
+        asyncio.create_task(self._persist_state(symbol))
 
     async def _staggered_panic_sell(self):
         """
@@ -334,6 +370,7 @@ class StrategyEngine:
             if st:
                 st.position_amount = 0.0
                 st.total_invested  = 0.0
+                await self._persist_state(sym)
             await asyncio.sleep(PANIC_SELL_STAGGER_S)
         self.is_panic_selling = False
 
@@ -347,6 +384,22 @@ class StrategyEngine:
         config = await database.get_bot_config()
         active_mode = config.get("mode", "paper")
         self.starting_balance = await database.get_balance(self.fiat_currency, mode=active_mode)
+        if active_mode == "live":
+            try:
+                from exchange import CoinDCXClient
+                client = CoinDCXClient()
+                live_balances = await client.get_balances()
+                if isinstance(live_balances, list):
+                    for b in live_balances:
+                        currency = b.get("currency")
+                        b_amt = float(b.get("balance", 0.0))
+                        if currency in ["USDT", "INR", "EUR"]:
+                            cur = "USD" if currency == "USDT" else currency
+                            await database.set_balance(cur, b_amt, mode="live")
+                            if cur == self.fiat_currency:
+                                self.starting_balance = b_amt
+            except Exception as e:
+                logger.error(f"Failed to fetch live starting balance: {e}")
         
         global_kill_pct = config.get("daily_loss_limit", 15.0) / 100.0
         
@@ -383,8 +436,28 @@ class StrategyEngine:
 
                 # ── Initialise state for new symbol ───────────────────
                 if symbol not in self.states:
-                    self.states[symbol] = SymbolState()
+                    state = SymbolState()
+                    import json
+                    st_json = await database.load_strategy_state(symbol)
+                    if st_json:
+                        try:
+                            state.from_dict(json.loads(st_json))
+                            logger.info(f"Loaded persistent state for {symbol}")
+                        except Exception as e:
+                            logger.error(f"Failed to load state for {symbol}: {e}")
+                    self.states[symbol] = state
                 st = self.states[symbol]
+
+                # ── True DB State Sync ────────────────────────────────
+                pos = await database.get_position(symbol, mode=active_mode)
+                if pos:
+                    st.position_amount = pos['amount']
+                    st.avg_entry = pos['average_price_usd']
+                    st.total_invested = st.position_amount * st.avg_entry
+                else:
+                    st.position_amount = 0.0
+                    st.avg_entry = 0.0
+                    st.total_invested = 0.0
 
                 # ── Feed raw tick ─────────────────────────────────────
                 st.raw_prices.append(price)
@@ -400,15 +473,10 @@ class StrategyEngine:
 
                 # ════════════════════════════════════════════════════
                 #  RISK LAYER 1 — Black-swan circuit breaker
-                #  Triggers on a >15 % drop within 60 seconds.
-                #  First two events → 2-hour soft ban.
-                #  Third event in 24 h → permanent session ban.
-                #  Open position is closed immediately on detection.
                 # ════════════════════════════════════════════════════
                 if len(st.raw_prices) == st.raw_prices.maxlen:
                     max_60s = max(st.raw_prices)
                     if price < max_60s * (1 - BLACK_SWAN_DROP):
-                        # Roll the 24-h window
                         if now_ts - st.flash_crash_window_start > 86400:
                             st.flash_crash_count = 0
                             st.flash_crash_window_start = now_ts
@@ -425,6 +493,8 @@ class StrategyEngine:
                         else:
                             st.blacklist_until = now_ts + BLACKLIST_TIMEOUT_S
                             logger.warning(f"{symbol}: soft-banned for {BLACKLIST_TIMEOUT_S // 3600}h.")
+
+                        await self._persist_state(symbol)
 
                         if st.position_amount > 0:
                             await self._place_sell(symbol, st.position_amount, price, ticker, "FLASH CRASH EXIT")

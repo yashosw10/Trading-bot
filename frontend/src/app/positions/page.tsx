@@ -4,7 +4,8 @@ import { useEffect, useState } from "react";
 import DashboardLayout from "@/components/layout/DashboardLayout";
 import { Activity, Briefcase, TrendingUp, TrendingDown, Clock, Tag } from "lucide-react";
 import { useQuery } from "@tanstack/react-query";
-import { api } from "@/lib/api";
+import { api, WS_URL } from "@/lib/api";
+import { wsManager } from "@/lib/ws";
 import { QUERY_KEYS } from "@/lib/queryKeys";
 import { motion } from "framer-motion";
 
@@ -19,44 +20,23 @@ export default function PositionsPage() {
   const [connectionState, setConnectionState] = useState<"connecting" | "connected" | "disconnected">("connecting");
 
   useEffect(() => {
-    // Establish WebSocket connection for live price updates
-    const ws = new WebSocket("ws://127.0.0.1:8000/ws");
+    wsManager.sendMessage({ action: "subscribe", channel: "prices" });
+    setConnectionState("connected");
 
-    ws.onopen = () => {
-      setConnectionState("connected");
-      // Subscribe handshake
-      ws.send(JSON.stringify({ action: "subscribe", channel: "prices" }));
-    };
-
-    ws.onclose = () => {
-      setConnectionState("disconnected");
-    };
-
-    ws.onerror = () => {
-      setConnectionState("disconnected");
-    };
-
-    ws.onmessage = (event) => {
-      try {
-        const data = JSON.parse(event.data);
-        if (data.type === "ticker" || data.symbol) {
-          if (data.price_usd === undefined) {
-            console.warn('[WS] price_usd missing on prices payload', data);
-          } else {
-            setLivePrices(prev => ({
-              ...prev,
-              [data.symbol]: parseFloat(data.price_usd)
-            }));
-          }
+    const unsubscribe = wsManager.subscribe((data) => {
+      if (data.type === "ticker" || data.symbol) {
+        if (data.price_usd === undefined) {
+          console.warn('[WS] price_usd missing on prices payload', data);
+        } else {
+          setLivePrices(prev => ({
+            ...prev,
+            [data.symbol]: parseFloat(data.price_usd)
+          }));
         }
-      } catch (e) {
-        console.error("Failed to parse WebSocket message", e);
       }
-    };
+    });
 
-    return () => {
-      ws.close();
-    };
+    return unsubscribe;
   }, []);
 
   const openPositions = positions 

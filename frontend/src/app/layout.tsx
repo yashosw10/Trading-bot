@@ -37,6 +37,8 @@ export default function RootLayout({
         <ThemeProvider attribute="class" defaultTheme="system" enableSystem>
           <QueryProvider>
             {children}
+            <Toaster position="bottom-right" />
+            <GlobalAlerts />
           </QueryProvider>
         </ThemeProvider>
       </body>

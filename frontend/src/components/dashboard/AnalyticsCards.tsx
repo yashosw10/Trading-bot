@@ -6,13 +6,18 @@ import { QUERY_KEYS } from "@/lib/queryKeys";
 import { TrendingUp, Target, Activity, AlertTriangle } from "lucide-react";
 import { useMemo } from "react";
 
-const INITIAL_BALANCE = 10000;
-
 export default function AnalyticsCards() {
+  const { data: config } = useQuery({
+    queryKey: QUERY_KEYS.config,
+    queryFn: api.getConfig
+  });
+
   const { data: trades, isLoading } = useQuery({
     queryKey: QUERY_KEYS.trades,
     queryFn: api.getTrades
   });
+
+  const INITIAL_BALANCE = config?.starting_balance || 10000;
 
   const stats = useMemo(() => {
     if (!trades || trades.length === 0) {

@@ -87,8 +87,7 @@ export default function PortfolioSummary({ currency }: { currency: Currency }) {
   const investedVal = invested?.[currency] || 0;
   const profitVal = profit?.total_profit || 0;
   
-  // Calculate Indian 30% Crypto Tax on total profit
-  const postTaxProfitVal = profitVal > 0 ? profitVal * 0.70 : profitVal;
+
 
   const totalValue = balanceVal + investedVal;
 
@@ -117,14 +116,7 @@ export default function PortfolioSummary({ currency }: { currency: Currency }) {
       bg: isProfit ? "bg-green-500/10" : "bg-red-500/10",
       isProfitVal: true
     },
-    {
-      label: "Net Profit (Post-Tax 30%)",
-      value: formatMoney(postTaxProfitVal),
-      icon: isProfit ? TrendingUp : TrendingDown,
-      color: isProfit ? "text-green-600" : "text-red-500",
-      bg: isProfit ? "bg-green-600/10" : "bg-red-500/10",
-      isProfitVal: true
-    },
+
     {
       label: "Portfolio Value",
       value: formatMoney(totalValue),

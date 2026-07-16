@@ -8,25 +8,29 @@ import { useMutation } from "@tanstack/react-query";
 
 export default function KillSwitchButton() {
   const [isOpen, setIsOpen] = useState(false);
-  const [countdown, setCountdown] = useState(0);
+  const [countdown, setCountdown] = useState(-1); // -1 = inactive, >0 = counting, 0 = fire
 
   const mutation = useMutation({
     mutationFn: api.killBot,
     onSuccess: () => {
-      setIsOpen(false);
-      // Let the WS or global state handle the rest or refresh
+      handleClose();
     }
   });
+
+  const handleClose = () => {
+    setIsOpen(false);
+    setCountdown(-1); // Reset countdown on close
+  };
 
   useEffect(() => {
     if (countdown > 0) {
       const timer = setTimeout(() => setCountdown(c => c - 1), 1000);
       return () => clearTimeout(timer);
-    } else if (countdown === 0 && isOpen) {
-      // Fire
+    } else if (countdown === 0) {
+      // Only fires after counting down from a positive number (user confirmed)
       mutation.mutate();
     }
-  }, [countdown, isOpen]);
+  }, [countdown]);
 
   const handleTrigger = () => {
     setCountdown(3);
@@ -52,7 +56,7 @@ export default function KillSwitchButton() {
               exit={{ opacity: 0 }}
               className="absolute inset-0 bg-black/60 backdrop-blur-sm"
               onClick={() => {
-                if (countdown === 0 || countdown === 3) setIsOpen(false);
+                if (countdown <= 0 || countdown === 3) handleClose();
               }}
             />
             
@@ -89,7 +93,7 @@ export default function KillSwitchButton() {
                 ) : (
                   <div className="grid grid-cols-2 gap-4">
                     <button
-                      onClick={() => setIsOpen(false)}
+                      onClick={handleClose}
                       className="px-4 py-3 rounded-xl bg-neutral-100 dark:bg-white/5 text-neutral-900 dark:text-white font-semibold hover:bg-neutral-200 dark:hover:bg-white/10 transition-colors"
                     >
                       Cancel

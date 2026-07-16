@@ -4,8 +4,7 @@ import { PositionsResponse } from '../types/position';
 import { TradesResponse } from '../types/trade';
 import { AddFundsPayload, AddFundsResponse } from '../types/fund';
 
-export const WS_URL = "ws://127.0.0.1:8000/ws";
-
+export { WS_URL } from './endpoints';
 const fetcher = async <T>(url: string, options?: RequestInit): Promise<T> => {
   const res = await fetch(url, options);
   if (!res.ok) {
@@ -39,6 +38,7 @@ export const api = {
   killBot: () => fetcher<{status: string, message: string}>(`${API_BASE_URL}/bot/kill`, { method: 'POST' }),
   pauseBot: () => fetcher<{status: string, message: string}>(`${API_BASE_URL}/bot/pause`, { method: 'POST' }),
   resumeBot: () => fetcher<{status: string, message: string}>(`${API_BASE_URL}/bot/resume`, { method: 'POST' }),
+  getWsTicket: () => fetcher<{ticket: string}>(`${API_BASE_URL}/ws-ticket`),
   
   addFunds: (payload: AddFundsPayload) => fetcher<AddFundsResponse>(ENDPOINTS.ADD_FUNDS, {
     method: 'POST',

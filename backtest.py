@@ -10,14 +10,14 @@ from api import get_ohlcv
 EMA_PERIOD = 50
 RSI_PERIOD = 14
 BB_PERIOD = 20
-BB_VOLATILITY_THRESH = 0.05
-RSI_ENTRY_GATE = 35
-RSI_DCA_SKIP_LOW = 40
-RSI_DCA_SKIP_HIGH = 60
+BB_VOLATILITY_THRESH = 0.020
+RSI_ENTRY_GATE = 48
+RSI_DCA_SKIP_LOW = 48
+RSI_DCA_SKIP_HIGH = 58
 
-GRID_TIGHT = 0.01   # 1%
-GRID_WIDE = 0.03    # 3%
-MAX_DCA_LAYERS = 5
+GRID_TIGHT = 0.005
+GRID_WIDE = 0.020
+MAX_DCA_LAYERS = 4
 
 async def run_backtest(symbol: str, interval: str, limit: int, config: dict):
     # Fetch historical data

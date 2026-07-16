@@ -24,7 +24,7 @@ export default function BacktestViewer() {
   }
 
   // Handle 404 cleanly
-  if (error && (error as any).message?.includes("404") || error?.message?.includes("No backtest")) {
+  if (error && ((error as any).message?.includes("404") || (error as any).message?.includes("No backtest"))) {
     return (
       <div className="glass-panel p-12 flex flex-col items-center justify-center text-center">
         <div className="w-16 h-16 bg-blue-500/10 rounded-full flex items-center justify-center mb-4">
