@@ -85,7 +85,7 @@ export default function EquityCurve() {
           </div>
         ) : (
           <ResponsiveContainer width="100%" height="100%">
-            <AreaChart data={chartData} margin={{ top: 10, right: 10, left: -20, bottom: 0 }}>
+            <AreaChart data={chartData} margin={{ top: 10, right: 10, left: 10, bottom: 0 }}>
               <defs>
                 <linearGradient id="splitColor" x1="0" y1="0" x2="0" y2="1">
                   <stop offset={off} stopColor="#22c55e" stopOpacity={0.3} />
@@ -106,6 +106,7 @@ export default function EquityCurve() {
                 tickLine={false} 
                 tick={{ fontSize: 12, fill: '#888' }}
                 tickFormatter={(value) => `$${value.toLocaleString()}`}
+                width={80}
               />
               <Tooltip 
                 contentStyle={{ 

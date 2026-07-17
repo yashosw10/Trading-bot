@@ -8,6 +8,7 @@ import { api, WS_URL } from "@/lib/api";
 import { wsManager } from "@/lib/ws";
 import { QUERY_KEYS } from "@/lib/queryKeys";
 import { motion } from "framer-motion";
+import PositionSparkline from "@/components/dashboard/PositionSparkline";
 
 export default function PositionsPage() {
   const { data: positions, isLoading, isError } = useQuery({
@@ -151,7 +152,10 @@ export default function PositionsPage() {
                   </div>
                 </div>
 
-                <div className="pt-4 border-t border-black/10 dark:border-white/10 flex items-end justify-between">
+                {/* Historical PnL Chart */}
+                <PositionSparkline symbol={pos.symbol} entryPrice={pos.average_price_usd} />
+
+                <div className="pt-4 border-t border-black/10 dark:border-white/10 flex items-end justify-between mt-2">
                   <div>
                     <p className="text-sm font-medium text-neutral-500 mb-1">Current Price</p>
                     <p className="font-mono text-lg font-bold">

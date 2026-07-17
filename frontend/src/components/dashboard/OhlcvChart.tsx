@@ -33,7 +33,10 @@ export default function OhlcvChart({ activeCoin = "BTC/USDT" }: { activeCoin?: s
     if (!ohlcv || ohlcv.length === 0) return [];
     let merged = ohlcv.map((d: any) => ({
       ...d,
-      time: new Date(d.timestamp).toLocaleTimeString([], { hour: '2-digit', minute: '2-digit' }),
+      time: interval === '1d' 
+        ? new Date(d.timestamp).toLocaleDateString([], { month: 'short', day: 'numeric' })
+        : new Date(d.timestamp).toLocaleTimeString([], { hour: '2-digit', minute: '2-digit' }),
+      fullTime: new Date(d.timestamp).toLocaleString([], { month: 'short', day: 'numeric', hour: '2-digit', minute: '2-digit' })
     }));
     
     if (indicatorData && indicatorData.length > 0 && indicatorType !== "NONE") {
@@ -58,7 +61,7 @@ export default function OhlcvChart({ activeCoin = "BTC/USDT" }: { activeCoin?: s
 
   const hasData = chartData.length > 0;
   
-  const timeframes = ['1m', '5m', '15m', '1h', '4h', '1d'];
+  const timeframes = ['1m', '15m', '1h', '1d'];
   const indicators = ['NONE', 'SMA', 'EMA', 'BOLLINGER', 'RSI', 'MACD'];
 
   return (
@@ -145,13 +148,20 @@ export default function OhlcvChart({ activeCoin = "BTC/USDT" }: { activeCoin?: s
               )}
               <Tooltip 
                 contentStyle={{ 
-                  backgroundColor: 'rgba(28, 28, 30, 0.8)', 
+                  backgroundColor: 'rgba(28, 28, 30, 0.9)', 
                   backdropFilter: 'blur(12px)',
                   border: '1px solid rgba(255,255,255,0.1)',
                   borderRadius: '12px',
                   color: '#fff'
                 }}
                 itemStyle={{ color: '#fff', fontWeight: 'bold' }}
+                labelStyle={{ color: '#888', marginBottom: '8px' }}
+                labelFormatter={(label, payload) => payload && payload.length > 0 ? payload[0].payload.fullTime : label}
+                formatter={(value: number, name: string) => {
+                  if (name === 'close') return [`$${value.toLocaleString(undefined, { minimumFractionDigits: 2, maximumFractionDigits: 4 })}`, 'Price'];
+                  if (name === 'volume') return [value.toLocaleString(undefined, { maximumFractionDigits: 2 }), 'Volume'];
+                  return [value, name];
+                }}
               />
               <Bar yAxisId="volume" dataKey="volume" fill="#3b82f6" opacity={0.3} radius={[4,4,0,0]} />
               

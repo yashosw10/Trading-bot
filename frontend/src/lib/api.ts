@@ -57,5 +57,6 @@ export const api = {
   }),
   testTelegram: () => fetcher<{status: string; message: string}>(`${API_BASE_URL}/bot/test-telegram`, {
     method: 'POST'
-  })
+  }),
+  getOhlcv: (symbol: string, interval: string = '1h', limit: number = 24) => fetcher<any>(`${API_BASE_URL}/ohlcv?symbol=${encodeURIComponent(symbol)}&interval=${interval}&limit=${limit}`)
 };

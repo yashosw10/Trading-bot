@@ -34,16 +34,9 @@ export default function TopNav() {
         </button>
       </div>
 
-      {/* Search Bar */}
+      {/* Search Bar removed to keep UI clean and avoid non-functional elements */}
       <div className="hidden md:flex flex-1 max-w-md pointer-events-auto">
-        <div className="relative w-full">
-          <Search className="absolute left-3 top-1/2 -translate-y-1/2 w-4 h-4 text-neutral-400" />
-          <input 
-            type="text" 
-            placeholder="Search symbols or trades..." 
-            className="w-full pl-10 pr-4 py-2.5 rounded-2xl liquid-glass focus:outline-none focus:ring-2 focus:ring-blue-500/50"
-          />
-        </div>
+        {/* Spacer to keep layout balanced if needed, or just leave empty */}
       </div>
 
       {/* Right Actions */}

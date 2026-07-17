@@ -30,7 +30,9 @@ class CoinDCXClient:
                             "coindcx_name": m.get("coindcx_name"),
                             "target_precision": m.get("target_currency_precision", 8),
                             "base_precision": m.get("base_currency_precision", 2),
-                            "step": m.get("step", 0.00001)
+                            "step": m.get("step", 0.00001),
+                            "min_quantity": m.get("min_quantity", 0.0),
+                            "min_notional": m.get("min_notional", 0.0)
                         }
             except Exception as e:
                 logger.error(f"Error fetching market details: {e}")
@@ -82,6 +84,17 @@ class CoinDCXClient:
             # Round amount to target_precision (e.g. 5 decimal places)
             amount = round(amount, market_info["target_precision"])
             price = round(price, market_info["base_precision"])
+            
+            notional = amount * price
+            min_quantity = market_info.get("min_quantity", 0.0)
+            min_notional = market_info.get("min_notional", 0.0)
+            
+            if amount < min_quantity:
+                logger.warning(f"Order rejected locally: Amount {amount} is below the exchange minimum of {min_quantity}.")
+                return None
+            if notional < min_notional:
+                logger.warning(f"Order rejected locally: Total value {notional} is below the exchange minimum of {min_notional}. Please increase your base_order size in Settings.")
+                return None
         else:
             market = raw_symbol
             amount = round(amount, 8)
