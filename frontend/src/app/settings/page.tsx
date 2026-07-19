@@ -7,6 +7,7 @@ import { useState, useEffect } from "react";
 import { motion } from "framer-motion";
 import RiskLimitsPanel from "@/components/settings/RiskLimitsPanel";
 import NotificationSettingsPanel from "@/components/settings/NotificationSettingsPanel";
+import TradingPairsPanel from "@/components/settings/TradingPairsPanel";
 
 export default function SettingsPage() {
   const { theme, setTheme } = useTheme();
@@ -98,6 +99,7 @@ export default function SettingsPage() {
         {/* Notifications & API (Mock) */}
         <div className="space-y-6">
           <NotificationSettingsPanel />
+          <TradingPairsPanel />
 
           <div className="liquid-glass-card p-6 relative overflow-hidden group">
             <div className="absolute top-6 right-6">

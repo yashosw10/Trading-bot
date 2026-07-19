@@ -10,12 +10,23 @@ import CustomSelect from "../ui/CustomSelect";
 import { useMemo, useState } from "react";
 
 export default function OhlcvChart({ activeCoin = "BTC/USDT" }: { activeCoin?: string }) {
-  const [interval, setInterval] = useState("1h");
+  const [timeRange, setTimeRange] = useState("1 Hour");
   const [indicatorType, setIndicatorType] = useState("NONE");
   
+  const { queryInterval, queryLimit } = useMemo(() => {
+    switch (timeRange) {
+      case '15 Min': return { queryInterval: '1m', queryLimit: 15 };
+      case '1 Hour': return { queryInterval: '1m', queryLimit: 60 };
+      case '1 Day': return { queryInterval: '15m', queryLimit: 96 };
+      case '1 Week': return { queryInterval: '1h', queryLimit: 168 };
+      default: return { queryInterval: '1m', queryLimit: 60 };
+    }
+  }, [timeRange]);
+  
   const { data: ohlcv, isLoading } = useQuery({
-    queryKey: ['ohlcv', activeCoin, interval],
-    queryFn: () => api.getOhlcv(activeCoin, interval)
+    queryKey: ['ohlcv', activeCoin, timeRange],
+    queryFn: () => api.getOhlcv(activeCoin, queryInterval, queryLimit),
+    refetchInterval: 30000 // Auto-refresh every 30 seconds for real-time updates
   });
 
   const { data: trades } = useQuery({
@@ -24,17 +35,18 @@ export default function OhlcvChart({ activeCoin = "BTC/USDT" }: { activeCoin?: s
   });
 
   const { data: indicatorData } = useQuery({
-    queryKey: ['indicators', activeCoin, indicatorType, interval],
-    queryFn: () => api.getIndicators(activeCoin, indicatorType, interval),
-    enabled: indicatorType !== "NONE"
+    queryKey: ['indicators', activeCoin, indicatorType, queryInterval],
+    queryFn: () => api.getIndicators(activeCoin, indicatorType, queryInterval),
+    enabled: indicatorType !== "NONE",
+    refetchInterval: 30000
   });
 
   const chartData = useMemo(() => {
     if (!ohlcv || ohlcv.length === 0) return [];
     let merged = ohlcv.map((d: any) => ({
       ...d,
-      time: interval === '1d' 
-        ? new Date(d.timestamp).toLocaleDateString([], { month: 'short', day: 'numeric' })
+      time: (queryInterval === '1d' || queryInterval === '1h') 
+        ? new Date(d.timestamp).toLocaleDateString([], { month: 'short', day: 'numeric', hour: '2-digit', minute: '2-digit' })
         : new Date(d.timestamp).toLocaleTimeString([], { hour: '2-digit', minute: '2-digit' }),
       fullTime: new Date(d.timestamp).toLocaleString([], { month: 'short', day: 'numeric', hour: '2-digit', minute: '2-digit' })
     }));
@@ -61,7 +73,7 @@ export default function OhlcvChart({ activeCoin = "BTC/USDT" }: { activeCoin?: s
 
   const hasData = chartData.length > 0;
   
-  const timeframes = ['1m', '15m', '1h', '1d'];
+  const ranges = ['15 Min', '1 Hour', '1 Day', '1 Week'];
   const indicators = ['NONE', 'SMA', 'EMA', 'BOLLINGER', 'RSI', 'MACD'];
 
   return (
@@ -82,17 +94,17 @@ export default function OhlcvChart({ activeCoin = "BTC/USDT" }: { activeCoin?: s
           </div>
 
           <div className="flex gap-1 bg-black/5 dark:bg-white/5 p-1 rounded-xl">
-            {timeframes.map((tf) => (
+            {ranges.map((tr) => (
               <button
-                key={tf}
-                onClick={() => setInterval(tf)}
-                className={`px-3 py-1 text-sm font-medium rounded-lg transition-colors ${
-                  interval === tf 
+                key={tr}
+                onClick={() => setTimeRange(tr)}
+                className={`px-3 py-1 text-sm font-medium rounded-lg transition-colors whitespace-nowrap ${
+                  timeRange === tr 
                     ? 'bg-white dark:bg-[#1c1c1e] text-neutral-900 dark:text-white shadow-sm' 
                     : 'text-neutral-500 hover:text-neutral-700 dark:hover:text-neutral-300'
                 }`}
               >
-                {tf}
+                {tr}
               </button>
             ))}
           </div>
