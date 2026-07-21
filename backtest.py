@@ -30,62 +30,109 @@ _INTERVAL_HOURS = {
 }
 
 
-def _load_local(symbol: str, interval: str, limit: int):
+def _load_local(symbol: str, interval: str, limit: int = None, start_time_ms: int = None, end_time_ms: int = None):
     """
-    Load candles from history.db. Returns None (triggering live-API fallback)
-    unless the local DB actually covers the full requested `limit` window —
-    a partial match is NOT accepted as "good enough", to avoid silently
-    backtesting on a truncated window.
+    Load candles from history.db. Supports either 'limit' (most recent N) or 
+    explicit 'start_time_ms' and 'end_time_ms' bounds.
+    Returns None if coverage is insufficient.
     """
     if not os.path.exists(DB_PATH):
         return None
     try:
         conn = sqlite3.connect(DB_PATH)
         cursor = conn.cursor()
-        cursor.execute(
-            """
-            SELECT timestamp, open, high, low, close, volume
-            FROM candles
-            WHERE symbol = ? AND interval = ?
-            ORDER BY timestamp DESC LIMIT ?
-            """,
-            (symbol, interval, limit),
-        )
-        rows = cursor.fetchall()
-        conn.close()
+        
+        if start_time_ms and end_time_ms:
+            cursor.execute(
+                """
+                SELECT timestamp, open, high, low, close, volume
+                FROM candles
+                WHERE symbol = ? AND interval = ? AND timestamp >= ? AND timestamp <= ?
+                ORDER BY timestamp ASC
+                """,
+                (symbol, interval, start_time_ms, end_time_ms),
+            )
+            rows = cursor.fetchall()
+            conn.close()
+            
+            if not rows:
+                return None
+                
+            min_ts = rows[0][0]
+            max_ts = rows[-1][0]
+            
+            unit = interval[-1]
+            value = int(interval[:-1])
+            if unit == 'm':
+                tolerance = value * 60 * 1000
+            elif unit == 'h':
+                tolerance = value * 60 * 60 * 1000
+            elif unit == 'd':
+                tolerance = value * 24 * 60 * 60 * 1000
+            else:
+                tolerance = 60 * 1000
+                
+            # Allow tolerance of up to 2 intervals at the edges
+            if (min_ts - start_time_ms) > tolerance * 2 or (end_time_ms - max_ts) > tolerance * 2:
+                logger.warning(
+                    f"Local DB coverage insufficient for {symbol} {interval} date range. "
+                    f"Requested {start_time_ms} to {end_time_ms}, got {min_ts} to {max_ts}."
+                )
+                return None
+                
+            logger.info(f"Loaded {len(rows)} local {interval} candles for {symbol} (date range coverage)")
+            return [
+                {"timestamp": r[0], "open": r[1], "high": r[2], "low": r[3], "close": r[4], "volume": r[5]}
+                for r in rows
+            ]
+        else:
+            cursor.execute(
+                """
+                SELECT timestamp, open, high, low, close, volume
+                FROM candles
+                WHERE symbol = ? AND interval = ?
+                ORDER BY timestamp DESC LIMIT ?
+                """,
+                (symbol, interval, limit),
+            )
+            rows = cursor.fetchall()
+            conn.close()
+            
+            if not rows or len(rows) < limit:
+                logger.warning(
+                    f"Local DB coverage insufficient for {symbol} {interval}: "
+                    f"requested {limit} candles, found {len(rows) if rows else 0}."
+                )
+                return None
+
+            logger.info(f"Loaded {len(rows)} local {interval} candles for {symbol} (full limit coverage)")
+            return [
+                {"timestamp": r[0], "open": r[1], "high": r[2], "low": r[3], "close": r[4], "volume": r[5]}
+                for r in reversed(rows)  # oldest first for pandas TA
+            ]
+            
     except Exception as e:
         logger.error(f"Error reading local history: {e}")
         return None
 
-    if not rows:
-        return None
 
-    if len(rows) < limit:
-        logger.warning(
-            f"Local DB coverage insufficient for {symbol} {interval}: "
-            f"requested {limit} candles, found {len(rows)}. Falling back to live API."
-        )
-        return None
-
-    logger.info(f"Loaded {len(rows)} local {interval} candles for {symbol} (full coverage)")
-    return [
-        {"timestamp": r[0], "open": r[1], "high": r[2], "low": r[3], "close": r[4], "volume": r[5]}
-        for r in reversed(rows)  # oldest first for pandas TA
-    ]
-
-
-async def run_backtest(symbol: str, interval: str, limit: int, config: dict):
+async def run_backtest(symbol: str, interval: str, limit: int = None, config: dict = None, start_time_ms: int = None, end_time_ms: int = None):
+    if config is None: config = {}
+    
     # ── Dynamic config overrides, matching what the live bot pulls from DB ──
     max_dca_layers = int(config.get("max_dca_layers", MAX_DCA_LAYERS))
     rsi_entry_gate = int(config.get("rsi_entry_gate", RSI_ENTRY_GATE))
     base_order = float(config.get("base_order", BASE_ORDER))
     volume_multiplier = float(config.get("volume_multiplier", VOLUME_MULTIPLIER))
     per_trade_stop_pct = float(config.get("per_trade_stop_pct", PER_TRADE_STOP_PCT))
+    grid_tight = float(config.get("grid_tight", GRID_TIGHT))
+    grid_wide = float(config.get("grid_wide", GRID_WIDE))
+    time_stop_hours = float(config.get("time_stop_hours", TIME_STOP_HOURS))
 
     fee_rate = float(config.get("fee_rate", 0.001))
     slippage_rate = float(config.get("slippage_rate", 0.0005))
 
-    ohlcv = _load_local(symbol, interval, limit)
+    ohlcv = _load_local(symbol, interval, limit, start_time_ms, end_time_ms)
     if not ohlcv:
         if symbol.startswith("BINANCE:"):
             logger.error(f"No local Binance-sourced data for {symbol} {interval} — "
@@ -154,7 +201,7 @@ async def run_backtest(symbol: str, interval: str, limit: int, config: dict):
 
         cost_basis = sell_amt * avg_entry  # avg_entry is cost-per-unit, constant across partial sells
         trade_pnl = net_proceeds - cost_basis
-        balance += trade_pnl
+        balance += net_proceeds
 
         trades.append({
             "pnl": trade_pnl,
@@ -174,7 +221,7 @@ async def run_backtest(symbol: str, interval: str, limit: int, config: dict):
         bb_upper, bb_lower, bb_mid = row[bbu_col], row[bbl_col], row[bbm_col]
 
         bb_width = (bb_upper - bb_lower) / bb_mid if bb_mid > 0 else 0
-        base_grid = GRID_WIDE if bb_width > BB_VOLATILITY_THRESH else GRID_TIGHT
+        base_grid = grid_wide if bb_width > BB_VOLATILITY_THRESH else grid_tight
         grid = max(base_grid, 0.5 * bb_width)
 
         if cooldown_remaining > 0:
@@ -198,7 +245,7 @@ async def run_backtest(symbol: str, interval: str, limit: int, config: dict):
         # ── Time-stop (position stuck > 72h) ──
         elif dca_layer > 0 and last_trade_bar_idx is not None:
             hours_stuck = (i - last_trade_bar_idx) * interval_hours
-            if hours_stuck > TIME_STOP_HOURS:
+            if hours_stuck > time_stop_hours:
                 _record_sell(position_amount, price, "TIME-STOP", i)
                 dca_layer = 0
                 avg_entry = 0.0
@@ -321,6 +368,11 @@ async def run_backtest(symbol: str, interval: str, limit: int, config: dict):
         if cycle_trades else 0.0
     )
 
+    pnl_by_label = {}
+    for t in trades:
+        lbl = t["label"]
+        pnl_by_label[lbl] = pnl_by_label.get(lbl, 0.0) + t["pnl"]
+
     return {
         "strategy": "VA-DCA Hybrid",
         "start_date": str(df.index[0]),
@@ -334,5 +386,6 @@ async def run_backtest(symbol: str, interval: str, limit: int, config: dict):
         "total_trades": len(trades),
         "full_position_cycles": len(cycle_trades),
         "avg_trade_duration_hours": round(avg_trade_duration, 1),
+        "pnl_by_label": {k: round(v, 2) for k, v in pnl_by_label.items()},
         "is_mock": False,
     }

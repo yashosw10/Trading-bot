@@ -12,7 +12,10 @@ INTERVALS_TO_FETCH = [
     ("1h", 365)   # 1 year of 1-hour data
 ]
 
-SYMBOLS = ["BTC/USDT", "ETH/USDT"]  # Add more symbols as needed
+SYMBOLS = [
+    "BTC/USDT", "ETH/USDT", "SOL/USDT", 
+    "ZEC/USDT", "BNB/USDT", "XRP/USDT"
+]
 
 
 def setup_db():

@@ -12,15 +12,22 @@ from loguru import logger
 from download_history import setup_db, DB_FILE, check_gaps
 
 INTERVALS_TO_FETCH = [
-    ("1m", 90),
+    ("1m", 385),
     ("1h", 365)
 ]
 
-SYMBOLS = ["BTC/USDT", "ETH/USDT"]
+SYMBOLS = [
+    "BTC/USDT", "ETH/USDT", "SOL/USDT", 
+    "ZEC/USDT", "BNB/USDT", "XRP/USDT"
+]
 
 BINANCE_SYMBOL_MAP = {
     "BTC/USDT": "BTCUSDT",
-    "ETH/USDT": "ETHUSDT"
+    "ETH/USDT": "ETHUSDT",
+    "SOL/USDT": "SOLUSDT",
+    "ZEC/USDT": "ZECUSDT",
+    "BNB/USDT": "BNBUSDT",
+    "XRP/USDT": "XRPUSDT"
 }
 
 VISION_BASE_URL = "https://data.binance.vision/data/spot/monthly/klines"
@@ -107,7 +114,7 @@ async def download_binance_history_for_symbol(client, conn, symbol, interval, lo
     
     total_inserted = 0
     
-    gap_start_dt = start_dt
+    gap_start_dt = start_dt.replace(day=1, hour=0, minute=0, second=0, microsecond=0)
     
     # Phase 1: Monthly Archives
     while True:

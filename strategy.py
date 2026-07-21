@@ -25,13 +25,13 @@ BLACK_SWAN_DROP      = 0.15   # 15 % drop in 60 s triggers blacklist
 BLACK_SWAN_MAX       = 3      # Permanent ban after this many events in 24 h
 
 RSI_PERIOD           = 14     # RSI look-back (1-min candles)
-RSI_ENTRY_GATE       = 48     # Loosened: enter when RSI < 48 (was 40 — missed too many quality dips)
+RSI_ENTRY_GATE       = 40     # Tightened: enter when RSI < 40
 RSI_DCA_SKIP_LOW     = 48     # DCA skip zone: 48–58 (neutral — let position age)
 RSI_DCA_SKIP_HIGH    = 58     # (was 40–60 — now narrower, allows more DCA layers)
 EMA_PERIOD           = 50     # Trend filter — only buy above this EMA (1-min candles)
 
-GRID_TIGHT           = 0.005  # 0.5 % grid when low volatility
-GRID_WIDE            = 0.020  # 2.0 % grid when high volatility
+GRID_TIGHT           = 0.030  # 3.0 % grid when low volatility
+GRID_WIDE            = 0.050  # 5.0 % grid when high volatility
 BB_VOLATILITY_THRESH = 0.020  # BBW above this → wide grid
 
 # Take-profit tranches (must sum to 1.0)
