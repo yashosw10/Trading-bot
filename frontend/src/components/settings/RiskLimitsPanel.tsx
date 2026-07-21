@@ -14,7 +14,7 @@ export default function RiskLimitsPanel() {
     queryFn: api.getConfig
   });
 
-  const [formData, setFormData] = useState({
+  const [formData, setFormData] = useState<any>({
     daily_loss_limit: 5.0,
     max_drawdown_pct: 15.0,
     max_position_size: 100.0,
@@ -68,8 +68,8 @@ export default function RiskLimitsPanel() {
               step="0.1"
               min="0"
               max="100"
-              value={formData.daily_loss_limit}
-              onChange={(e) => setFormData({ ...formData, daily_loss_limit: parseFloat(e.target.value) })}
+              value={formData.daily_loss_limit ?? ""}
+              onChange={(e) => setFormData({ ...formData, daily_loss_limit: e.target.value === "" ? "" : parseFloat(e.target.value) })}
               className="w-full mt-1 bg-black/5 dark:bg-white/5 border border-black/10 dark:border-white/10 rounded-xl px-4 py-2.5 outline-none focus:ring-2 focus:ring-blue-500/50"
             />
           </div>
@@ -80,8 +80,8 @@ export default function RiskLimitsPanel() {
               step="0.1"
               min="0"
               max="100"
-              value={formData.max_drawdown_pct}
-              onChange={(e) => setFormData({ ...formData, max_drawdown_pct: parseFloat(e.target.value) })}
+              value={formData.max_drawdown_pct ?? ""}
+              onChange={(e) => setFormData({ ...formData, max_drawdown_pct: e.target.value === "" ? "" : parseFloat(e.target.value) })}
               className="w-full mt-1 bg-black/5 dark:bg-white/5 border border-black/10 dark:border-white/10 rounded-xl px-4 py-2.5 outline-none focus:ring-2 focus:ring-blue-500/50"
             />
           </div>
@@ -91,8 +91,8 @@ export default function RiskLimitsPanel() {
               type="number"
               step="1"
               min="0"
-              value={formData.max_position_size}
-              onChange={(e) => setFormData({ ...formData, max_position_size: parseFloat(e.target.value) })}
+              value={formData.max_position_size ?? ""}
+              onChange={(e) => setFormData({ ...formData, max_position_size: e.target.value === "" ? "" : parseFloat(e.target.value) })}
               className="w-full mt-1 bg-black/5 dark:bg-white/5 border border-black/10 dark:border-white/10 rounded-xl px-4 py-2.5 outline-none focus:ring-2 focus:ring-blue-500/50"
             />
           </div>
@@ -103,8 +103,8 @@ export default function RiskLimitsPanel() {
               step="1"
               min="1"
               max="10"
-              value={formData.max_open_positions}
-              onChange={(e) => setFormData({ ...formData, max_open_positions: parseInt(e.target.value) })}
+              value={formData.max_open_positions ?? ""}
+              onChange={(e) => setFormData({ ...formData, max_open_positions: e.target.value === "" ? "" : parseInt(e.target.value) })}
               className="w-full mt-1 bg-black/5 dark:bg-white/5 border border-black/10 dark:border-white/10 rounded-xl px-4 py-2.5 outline-none focus:ring-2 focus:ring-blue-500/50"
             />
           </div>

@@ -13,8 +13,8 @@ class CoinDCXClient:
         self.base_url = "https://api.coindcx.com"
         self._market_details = {}
 
-    async def _fetch_market_details(self):
-        if self._market_details:
+    async def _fetch_market_details(self, force=False):
+        if self._market_details and not force:
             return
         async with httpx.AsyncClient() as client:
             try:
@@ -75,10 +75,13 @@ class CoinDCXClient:
             
         await self._fetch_market_details()
         
-        # Format symbol for CoinDCX e.g. BTC/USDT -> BTCUSDT
         raw_symbol = symbol.replace("/", "")
         
         market_info = self._market_details.get(raw_symbol)
+        if not market_info:
+            await self._fetch_market_details(force=True)
+            market_info = self._market_details.get(raw_symbol)
+
         if market_info:
             market = market_info["coindcx_name"]
             # Round amount to target_precision (e.g. 5 decimal places)

@@ -80,7 +80,8 @@ class WebSocketManager {
     } catch (error) {
       this.isConnecting = false;
       this.ticketPromise = null;
-      console.error("Failed to connect WebSocket:", error);
+      console.warn("Failed to connect WebSocket (retrying in 5s):", error);
+      setTimeout(() => this.connect(), 5000);
     }
   }
 

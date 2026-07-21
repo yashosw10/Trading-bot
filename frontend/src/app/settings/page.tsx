@@ -70,7 +70,7 @@ export default function SettingsPage() {
 
           <div className="liquid-glass-card p-6">
             <h3 className="text-lg font-semibold mb-6 flex items-center gap-2">
-              {theme === "dark" ? <Moon className="w-5 h-5 text-neutral-500" /> : <Sun className="w-5 h-5 text-neutral-500" />}
+              {mounted ? (theme === "dark" ? <Moon className="w-5 h-5 text-neutral-500" /> : <Sun className="w-5 h-5 text-neutral-500" />) : <Sun className="w-5 h-5 text-neutral-500" />}
               Appearance
             </h3>
             {mounted && (

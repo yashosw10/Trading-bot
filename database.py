@@ -246,6 +246,11 @@ async def get_24h_pnl(fiat_currency: str, mode: str = 'paper') -> float:
             row = await cursor.fetchone()
             return row[0] if row and row[0] else 0.0
 
+async def get_session_pnl(fiat_currency: str, start_ts: float, mode: str = 'paper') -> float:
+    async with get_db_conn() as db:
+        async with db.execute(f"SELECT SUM(pnl_fiat) FROM trades_{_safe_mode(mode)} WHERE fiat_currency = ? AND timestamp >= datetime(?, 'unixepoch')", (fiat_currency, start_ts)) as cursor:
+            row = await cursor.fetchone()
+            return row[0] if row and row[0] else 0.0
 
 async def clear_history(mode: str = 'paper'):
     async with get_db_conn() as db:

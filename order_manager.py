@@ -54,7 +54,7 @@ class OrderManager:
                             cost_basis = avg_price * signal.amount
                             sale_value = execution_price * signal.amount
                             pnl_fiat = sale_value - cost_basis - fee
-                            pnl_percent = (pnl_fiat / cost_basis) * 100
+                            pnl_percent = (pnl_fiat / cost_basis) * 100 if cost_basis > 0 else 0.0
 
                 logger.info(f"Executing {signal.side.upper()} {signal.amount} {signal.symbol} at {execution_price:.2f} {signal.fiat_currency} (Fee: {fee:.2f}, PnL: {pnl_fiat:.2f})")
                 
