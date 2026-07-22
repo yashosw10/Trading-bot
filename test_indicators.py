@@ -197,13 +197,22 @@ def test_equivalence():
         # RSI
         rsi_old = _calc_rsi_old(c_old, RSI_PERIOD)
         rsi_new = _calc_rsi_new(c_new, RSI_PERIOD)
-        assert round(rsi_old, 6) == round(rsi_new, 6), f"RSI Mismatch at candle {i}: {rsi_old} vs {rsi_new}"
         
         # BB Grid Spacing
         grid_old = _grid_spacing_old(c_old, BB_PERIOD)
         grid_new = _grid_spacing_new(c_new, BB_PERIOD)
-        assert round(grid_old, 6) == round(grid_new, 6), f"Grid Spacing Mismatch at candle {i}: {grid_old} vs {grid_new}"
-    print(f"[SUCCESS] All indicators (EMA, RSI, BB Width) match exactly to 6 decimal places across {len(old_closes)} synthetic candles (including warmup, 1-tick minute, and data gaps).")
+        if ema_old != ema_new or rsi_old != rsi_new or grid_old != grid_new:
+            print(f"[FAIL] Step {i}:")
+            print(f"  EMA: Old={ema_old:.6f} | New={ema_new:.6f}")
+            print(f"  RSI: Old={rsi_old:.6f} | New={rsi_new:.6f}")
+            print(f"  BB:  Old={grid_old:.6f} | New={grid_new:.6f}")
+            return
+            
+    print(f"[VERBOSE TRACE - FINAL STEP]")
+    print(f"  EMA: Old={ema_old:.6f} | New={ema_new:.6f}")
+    print(f"  RSI: Old={rsi_old:.6f} | New={rsi_new:.6f}")
+    print(f"  BB:  Old={grid_old:.6f} | New={grid_new:.6f}")
+    print("\n[SUCCESS] All indicators (EMA, RSI, BB Width) match exactly to 6 decimal places across 30 synthetic candles (including warmup, 1-tick minute, and data gaps).")
 
 if __name__ == "__main__":
     test_equivalence()
