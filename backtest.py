@@ -118,7 +118,7 @@ def _load_local(symbol: str, interval: str, limit: int = None, start_time_ms: in
         return None
 
 
-async def run_backtest(symbol: str, interval: str, limit: int = None, config: dict = None, start_time_ms: int = None, end_time_ms: int = None):
+async def run_backtest(symbol: str, interval: str, limit: int = None, config: dict = None, start_time_ms: int = None, end_time_ms: int = None, exit_mode: str = "STATIC_LADDER"):
     if config is None: config = {}
     
     # ── Dynamic config overrides, matching what the live bot pulls from DB ──
@@ -245,7 +245,7 @@ async def run_backtest(symbol: str, interval: str, limit: int = None, config: di
             closed_this_bar = True
 
         # ── Time-stop (position stuck > 72h) ──
-        elif dca_layer > 0 and last_trade_bar_idx is not None:
+        elif dca_layer > 0 and last_trade_bar_idx is not None and exit_mode == "STATIC_LADDER":
             hours_stuck = (i - last_trade_bar_idx) * interval_hours
             if hours_stuck > time_stop_hours:
                 _record_sell(position_amount, price, "TIME-STOP", i)
@@ -304,45 +304,68 @@ async def run_backtest(symbol: str, interval: str, limit: int = None, config: di
                     last_buy_price = price
                     last_trade_bar_idx = i
 
-        # ── Take-profit tranches ──
+        # ── Take-profit tranches / Trailing TP ──
         elif dca_layer > 0 and avg_entry > 0:
-            g = entry_grid
-            hours_stuck = (i - last_trade_bar_idx) * interval_hours if last_trade_bar_idx is not None else 0.0
+            if exit_mode == "STATIC_LADDER":
+                g = entry_grid
+                hours_stuck = (i - last_trade_bar_idx) * interval_hours if last_trade_bar_idx is not None else 0.0
 
-            if not tp1_done:
-                if hours_stuck > TP1_DECAY_START_HOURS:
-                    decay = min(1.0, (hours_stuck - TP1_DECAY_START_HOURS) / TP1_DECAY_WINDOW_HOURS)
-                    target_mult = 1 + (g * (1 - decay)) + (0.002 * decay)
-                else:
-                    target_mult = 1 + g
+                if not tp1_done:
+                    if hours_stuck > TP1_DECAY_START_HOURS:
+                        decay = min(1.0, (hours_stuck - TP1_DECAY_START_HOURS) / TP1_DECAY_WINDOW_HOURS)
+                        target_mult = 1 + (g * (1 - decay)) + (0.002 * decay)
+                    else:
+                        target_mult = 1 + g
 
-                if price >= avg_entry * target_mult:
-                    sell_amt = position_amount * TP_TRANCHE_1_PCT
-                    _record_sell(sell_amt, price, "TP1-40pct", i)
-                    tp1_done = True
-                    trail_high = price
+                    if price >= avg_entry * target_mult:
+                        sell_amt = position_amount * TP_TRANCHE_1_PCT
+                        _record_sell(sell_amt, price, "TP1-40pct", i)
+                        tp1_done = True
+                        trail_high = price
 
-            elif tp1_done and not tp2_done and price >= avg_entry * (1 + 2 * g):
-                # 35% of what remains after TP1 (matches live behavior, since
-                # position_amount there reflects actual post-TP1 holdings)
-                sell_amt = position_amount * TP_TRANCHE_2_PCT
-                _record_sell(sell_amt, price, "TP2-35pct", i)
-                tp2_done = True
-                trail_high = max(trail_high, price)
+                elif tp1_done and not tp2_done and price >= avg_entry * (1 + 2 * g):
+                    # 35% of what remains after TP1 (matches live behavior)
+                    sell_amt = position_amount * TP_TRANCHE_2_PCT
+                    _record_sell(sell_amt, price, "TP2-35pct", i)
+                    tp2_done = True
+                    trail_high = max(trail_high, price)
 
-            elif tp2_done and position_amount > 0:
-                trail_high = max(trail_high, price)
-                trail_stop = trail_high * (1 - TRAIL_STOP_FACTOR * g)
-                if price <= trail_stop:
-                    _record_sell(position_amount, price, "TP3-trailing", i)
-                    dca_layer = 0
-                    avg_entry = 0.0
-                    tp1_done = tp2_done = False
-                    trail_high = 0.0
-                    last_buy_price = 0.0
-                    entry_grid = 0.0
-                    entry_bar_idx = None
-                    cooldown_remaining = reentry_cooldown_bars
+                elif tp2_done and position_amount > 0:
+                    trail_high = max(trail_high, price)
+                    trail_stop = trail_high * (1 - TRAIL_STOP_FACTOR * g)
+                    if price <= trail_stop:
+                        _record_sell(position_amount, price, "TP3-trailing", i)
+                        dca_layer = 0
+                        avg_entry = 0.0
+                        tp1_done = tp2_done = False
+                        trail_high = 0.0
+                        last_buy_price = 0.0
+                        entry_grid = 0.0
+                        entry_bar_idx = None
+                        cooldown_remaining = reentry_cooldown_bars
+            
+            elif exit_mode == "DYNAMIC_TRAILING":
+                # Activation Threshold: +1.5%
+                if price > avg_entry * 1.015:
+                    if not tp1_done:  # Use tp1_done as boolean flag for 'trail activated'
+                        tp1_done = True
+                        trail_high = price
+                    else:
+                        trail_high = max(trail_high, price)
+                
+                if tp1_done:
+                    # Trail Offset: -0.5%
+                    trail_stop = trail_high * (1 - 0.005)
+                    if price <= trail_stop:
+                        _record_sell(position_amount, price, "TTP-trailing-exit", i)
+                        dca_layer = 0
+                        avg_entry = 0.0
+                        tp1_done = tp2_done = False
+                        trail_high = 0.0
+                        last_buy_price = 0.0
+                        entry_grid = 0.0
+                        entry_bar_idx = None
+                        cooldown_remaining = reentry_cooldown_bars
 
         equity = balance + position_amount * price
         peak_balance = max(peak_balance, equity)
@@ -360,14 +383,17 @@ async def run_backtest(symbol: str, interval: str, limit: int = None, config: di
     win_rate = (wins / len(trades)) if trades else 0
     profit_factor = (gross_profit / gross_loss) if gross_loss > 0 else (99.9 if gross_profit > 0 else 0.0)
 
-    # Only "full cycle closes" (stop-loss / time-stop / TP3 / end-of-backtest)
+    # Only "full cycle closes" (stop-loss / time-stop / TP3 / TTP / end-of-backtest)
     # represent a complete position lifecycle for duration purposes.
-    full_cycle_labels = {"STOP-LOSS", "TIME-STOP", "TP3-trailing", "END-OF-BACKTEST"}
+    full_cycle_labels = {"STOP-LOSS", "TIME-STOP", "TP3-trailing", "TTP-trailing-exit", "END-OF-BACKTEST"}
     cycle_trades = [t for t in trades if t["label"] in full_cycle_labels]
     avg_trade_duration = (
         sum(t["bars_held"] for t in cycle_trades) / len(cycle_trades) * interval_hours
         if cycle_trades else 0.0
     )
+
+    sl_hits = sum(1 for t in cycle_trades if t["label"] == "STOP-LOSS")
+    sl_hit_rate = (sl_hits / len(cycle_trades) * 100) if cycle_trades else 0.0
 
     pnl_by_label = {}
     for t in trades:
@@ -387,6 +413,7 @@ async def run_backtest(symbol: str, interval: str, limit: int = None, config: di
         "total_trades": len(trades),
         "full_position_cycles": len(cycle_trades),
         "avg_trade_duration_hours": round(avg_trade_duration, 1),
+        "sl_hit_rate_pct": round(sl_hit_rate, 2),
         "pnl_by_label": {k: round(v, 2) for k, v in pnl_by_label.items()},
         "is_mock": False,
     }
