@@ -449,6 +449,7 @@ class StrategyEngine:
 
         self.peak_equity = self.starting_balance
         self.start_ts = datetime.now(timezone.utc).timestamp()
+        self.last_reset_ts = self.start_ts
 
         # ── Hydrate all SymbolStates on boot ──────────────────────────
         import json
@@ -485,6 +486,24 @@ class StrategyEngine:
                 symbol  = ticker.symbol
                 price   = ticker.price_usd
                 now_ts  = datetime.now(timezone.utc).timestamp()
+
+                # ── Rolling 24h Daily Reset ───────────────────────────
+                if now_ts - getattr(self, 'last_reset_ts', now_ts) >= 86400:
+                    session_pnl = await database.get_session_pnl(self.fiat_currency, self.start_ts, mode=active_mode)
+                    
+                    # Lock in the realized PnL to the baseline
+                    self.starting_balance += session_pnl
+                    self.start_ts = now_ts
+                    self.last_reset_ts = now_ts
+                    
+                    # Reset peak equity for the new 24h window
+                    total_unrealized = sum(
+                        s.position_amount * s.raw_prices[-1] - s.total_invested
+                        for s in self.states.values()
+                        if s.total_invested > 0 and s.raw_prices
+                    )
+                    self.peak_equity = self.starting_balance + total_unrealized
+                    logger.info(f"24H ROLLING RESET | New baseline balance: ${self.starting_balance:.2f}")
 
                 # ── Initialise state for new symbol ───────────────────
                 if symbol not in self.states:
