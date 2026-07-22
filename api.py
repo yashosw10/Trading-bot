@@ -263,7 +263,7 @@ async def get_balances():
                     break
         usd_to_inr = await database.get_fx_rate("INR")
         usd_to_eur = await database.get_fx_rate("EUR")
-        return {"USD": usd, "INR": usd * usd_to_inr, "EUR": usd * usd_to_eur}
+        return {"USD": round(usd, 2), "INR": round(usd * usd_to_inr, 2), "EUR": round(usd * usd_to_eur, 2)}
     else:
         usd = await database.get_balance("USD", mode="paper")
         inr = await database.get_balance("INR", mode="paper")

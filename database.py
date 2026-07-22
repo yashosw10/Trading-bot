@@ -13,6 +13,8 @@ async def get_db_conn():
     if _db_conn is None:
         _db_conn = await aiosqlite.connect(DB_FILE)
         _db_conn.row_factory = aiosqlite.Row
+        await _db_conn.execute("PRAGMA journal_mode=WAL;")
+        await _db_conn.execute("PRAGMA busy_timeout=5000;")
     yield _db_conn
 
 
@@ -304,10 +306,12 @@ async def execute_trade(symbol: str, side: str, fiat_currency: str, amount: floa
                 async with db.execute(f'SELECT amount FROM positions_{_safe_mode(mode)} WHERE symbol = ?', (symbol,)) as cursor:
                     row = await cursor.fetchone()
                     pos_amount = row[0] if row else 0.0
-                if pos_amount < amount:
-                    logger.warning(f"Insufficient {symbol} amount for {side}")
+                if (amount - pos_amount) > 1e-6:
+                    logger.warning(f"Insufficient {symbol} amount for {side}: requested {amount}, held {pos_amount}")
                     await db.rollback()
                     return False
+                elif pos_amount > 0 and (amount - pos_amount) <= 1e-6:
+                    amount = pos_amount
 
             if mode == 'paper':
                 if side == 'buy':
