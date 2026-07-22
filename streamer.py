@@ -48,6 +48,8 @@ class Streamer:
                         backoff_time = 5.0
                         config = await database.get_bot_config()
                         symbols = config.get("symbols", [])
+                        if isinstance(symbols, str):
+                            symbols = [s.strip() for s in symbols.split(",") if s.strip()]
                         if not self.market_map:
                             try:
                                 mr_resp = await client.get("https://api.coindcx.com/exchange/v1/markets_details")

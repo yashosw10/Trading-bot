@@ -78,3 +78,43 @@ async def test_state_serialization_round_trip():
     assert new_state.avg_entry == 60000.12345
     assert new_state.reentry_until == 123456789.0
     assert new_state.position_amount == 0.55
+
+@pytest.mark.asyncio
+async def test_order_failure_leaves_state_unmutated():
+    from order_manager import OrderManager
+    from models import TickerData
+
+    data_queue = asyncio.Queue()
+    order_queue = asyncio.Queue()
+    engine = StrategyEngine(data_queue, order_queue)
+
+    symbol = "BTC/USDT"
+    ticker = TickerData(symbol=symbol, price_usd=60000.0, price_inr=5000000.0, price_eur=55000.0, timestamp=1700000000)
+
+    # 1. Trigger buy signal in strategy
+    await engine._place_buy(symbol, 100.0, 60000.0, ticker, "BASE ORDER")
+
+    st = engine.states[symbol]
+    # Assert order_pending is now locked before completion
+    assert st.order_pending is True
+    assert st.dca_layer == 0  # Unmutated prior to execution confirmation
+
+    order_mgr = OrderManager(order_queue, on_order_completed=engine.on_order_completed)
+
+    with patch('database.get_bot_config', new_callable=AsyncMock) as mock_config:
+        mock_config.return_value = {'mode': 'live', 'fee_rate': 0.001, 'slippage_rate': 0.0005}
+        with patch('exchange.CoinDCXClient.get_balances', new_callable=AsyncMock) as mock_bal:
+            mock_bal.return_value = []
+            with patch('exchange.CoinDCXClient.place_order', new_callable=AsyncMock) as mock_place:
+                mock_place.return_value = None  # Simulate exchange failure/rejection
+
+                shutdown_event = asyncio.Event()
+                manager_task = asyncio.create_task(order_mgr.start(shutdown_event))
+                await order_queue.join()
+                shutdown_event.set()
+                await manager_task
+
+    # Assert state remains unmutated and lock is released
+    assert st.order_pending is False
+    assert st.dca_layer == 0
+    assert st.last_buy_price == 0.0

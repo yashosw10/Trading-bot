@@ -11,7 +11,15 @@ import database
 from streamer import Streamer
 from strategy import StrategyEngine
 from order_manager import OrderManager
-from datetime import timedelta
+def _get_parsed_symbols(config: dict, default=None) -> list:
+    if default is None:
+        default = ["BTC/USDT", "ETH/USDT", "BNB/USDT", "SOL/USDT", "XRP/USDT"]
+    symbols = config.get("symbols", default)
+    if isinstance(symbols, str):
+        return [s.strip() for s in symbols.split(",") if s.strip()]
+    elif isinstance(symbols, list):
+        return symbols
+    return default
 
 async def daily_summary_loop(shutdown_event: asyncio.Event):
     import utils
@@ -47,7 +55,7 @@ async def position_reconciliation_loop(shutdown_event: asyncio.Event):
                 if isinstance(live_balances, list):
                     exchange_assets = {b.get("currency"): float(b.get("balance", 0.0)) for b in live_balances}
                     
-                    symbols_to_check = config.get("symbols", [])
+                    symbols_to_check = _get_parsed_symbols(config, [])
                     for symbol in symbols_to_check:
                         # e.g. BTC/USDT -> base = BTC
                         base_asset = symbol.split('/')[0] if '/' in symbol else symbol
@@ -101,7 +109,7 @@ async def lifespan(app: FastAPI):
     streamer = Streamer(queue=data_queue, symbol='BTC/USDT', broadcast_cb=broadcast_ws)
     strategy = StrategyEngine(data_queue=data_queue, order_queue=order_queue)
     strategy.fiat_currency = 'USD' 
-    order_manager = OrderManager(order_queue=order_queue, broadcast_cb=broadcast_ws)
+    order_manager = OrderManager(order_queue=order_queue, broadcast_cb=broadcast_ws, on_order_completed=strategy.on_order_completed)
 
     # Attach to app state so we can access them later if needed
     app.state.strategy_engine = strategy
@@ -266,7 +274,7 @@ async def get_balances():
 async def get_positions():
     config = await database.get_bot_config()
     mode = config.get("mode", "paper")
-    symbols = config.get("symbols", [])
+    symbols = _get_parsed_symbols(config, [])
     positions = {}
     for symbol in symbols:
         pos = await database.get_position(symbol, mode=mode)
@@ -572,7 +580,7 @@ class OrderRequest(BaseModel):
     type: str = "market"
 
 @app.post("/api/orders")
-async def manual_order(order: OrderRequest):
+async def manual_order(order: OrderRequest, request: Request):
     from fastapi import HTTPException
     import math
     
@@ -583,15 +591,19 @@ async def manual_order(order: OrderRequest):
         raise HTTPException(status_code=400, detail="Side must be 'buy' or 'sell'")
         
     config = await database.get_bot_config()
-    allowed_symbols = config.get("symbols", "BTC/USDT,ETH/USDT,BNB/USDT").split(",")
+    allowed_symbols = _get_parsed_symbols(config)
     if order.symbol not in allowed_symbols:
         raise HTTPException(status_code=400, detail=f"Symbol {order.symbol} is not in the allowed watchlist")
         
-    config = await database.get_bot_config()
     mode = config.get("mode", "paper")
     fee_rate = config.get("fee_rate", 0.001)
     
-    # Fetch current price from latest ticker or fallback to 0 (which would fail trade)
+    strategy = getattr(request.app.state, "strategy_engine", None)
+    if strategy and order.symbol in strategy.states:
+        st = strategy.states[order.symbol]
+        if st.order_pending:
+            raise HTTPException(status_code=409, detail=f"An order for {order.symbol} is currently in flight. Please try again.")
+
     from utils import fetch_current_price
     
     price_usd = 0.0
@@ -603,21 +615,11 @@ async def manual_order(order: OrderRequest):
     if price_usd <= 0:
         raise HTTPException(status_code=400, detail="Could not fetch valid price for execution.")
         
-    fee = order.amount * price_usd * fee_rate
+    exec_price = price_usd
+    exec_fee = order.amount * price_usd * fee_rate
+    exec_amount = order.amount
     pnl_fiat = 0.0
     pnl_percent = 0.0
-    
-    if order.side.lower() == 'sell':
-        pos = await database.get_position(order.symbol, mode=mode)
-        if pos:
-            avg_price = pos.get('average_price_usd', 0)
-            if avg_price > 0:
-                cost_basis = avg_price * order.amount
-                sale_value = price_usd * order.amount
-                pnl_fiat = sale_value - cost_basis - fee
-                pnl_percent = (pnl_fiat / cost_basis) * 100
-                
-    success = True
     
     # Live execution on exchange
     if mode == "live":
@@ -631,28 +633,45 @@ async def manual_order(order: OrderRequest):
             order_type=order.type
         )
         if not resp:
-            success = False
             raise HTTPException(status_code=500, detail="Exchange order failed to place")
-
-    if success:
-        # Since manual order, we don't have strategy context, pass mfe=0, mae=0
-        success = await database.execute_trade(
-            symbol=order.symbol,
-            side=order.side.lower(),
-            fiat_currency="USD",
-            amount=order.amount,
-            price=price_usd,
-            fee=fee,
-            pnl_fiat=pnl_fiat,
-            pnl_percent=pnl_percent,
-            mfe=0.0,
-            mae=0.0,
-            mode=mode
-        )
-        if not success:
-            raise HTTPException(status_code=400, detail="Trade execution failed. Check wallet balance or position limits.")
         
-    return {"status": "success", "message": "Manual order executed.", "price": price_usd}
+        if resp.get('price_per_unit'):
+            exec_price = float(resp['price_per_unit'])
+        if resp.get('fee_amount'):
+            exec_fee = float(resp['fee_amount'])
+        if resp.get('total_quantity'):
+            exec_amount = float(resp['total_quantity'])
+
+    if order.side.lower() == 'sell':
+        pos = await database.get_position(order.symbol, mode=mode)
+        if pos:
+            avg_price = pos.get('average_price_usd', 0)
+            if avg_price > 0:
+                cost_basis = avg_price * exec_amount
+                sale_value = exec_price * exec_amount
+                pnl_fiat = sale_value - cost_basis - exec_fee
+                pnl_percent = (pnl_fiat / cost_basis) * 100 if cost_basis > 0 else 0.0
+
+    success = await database.execute_trade(
+        symbol=order.symbol,
+        side=order.side.lower(),
+        fiat_currency="USD",
+        amount=exec_amount,
+        price=exec_price,
+        fee=exec_fee,
+        pnl_fiat=pnl_fiat,
+        pnl_percent=pnl_percent,
+        mfe=0.0,
+        mae=0.0,
+        mode=mode
+    )
+    if not success:
+        raise HTTPException(status_code=400, detail="Trade execution failed. Check wallet balance or position limits.")
+
+    if strategy:
+        await strategy.on_order_completed(order.symbol, order.side.lower(), exec_amount, exec_price, success, label="MANUAL ORDER")
+
+    return {"status": "success", "message": "Manual order executed.", "price": exec_price}
 
 class BacktestRequest(BaseModel):
     symbol: str

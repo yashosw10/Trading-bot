@@ -60,7 +60,7 @@ export default function ActivePositions() {
   });
 
   const symbols = config?.symbols || [];
-  const activeSymbols = symbols.filter(sym => positions?.[sym] && positions[sym].amount > 0);
+  const activeSymbols = symbols.filter((sym: string) => positions?.[sym] && positions[sym].amount > 0);
   const hasPositions = activeSymbols.length > 0;
 
   return (
@@ -95,7 +95,7 @@ export default function ActivePositions() {
           </div>
         ) : (
           <div>
-            {activeSymbols.map(symbol => {
+            {activeSymbols.map((symbol: string) => {
               const pos = positions?.[symbol];
               if (!pos) return null;
               return (

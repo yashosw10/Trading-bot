@@ -75,7 +75,7 @@ export default function PositionSparkline({ symbol, entryPrice }: PositionSparkl
             }}
             itemStyle={{ color: '#fff', fontWeight: 'bold' }}
             labelStyle={{ color: '#888', fontSize: '10px', marginBottom: '2px' }}
-            formatter={(value: number) => [`$${value.toLocaleString()}`, 'Price']}
+            formatter={(value: any) => [`$${Number(value || 0).toLocaleString()}`, 'Price']}
           />
           <ReferenceLine y={entryPrice} stroke="#888" strokeDasharray="3 3" opacity={0.5} />
           <Area 

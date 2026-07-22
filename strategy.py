@@ -155,6 +155,7 @@ class SymbolState:
         self.blacklist_until: float        = 0.0   # 0 = not banned; inf = permanent
         self.flash_crash_count: int        = 0
         self.flash_crash_window_start: float = 0.0
+        self.order_pending: bool           = False
 
     def to_dict(self):
         return {
@@ -277,6 +278,13 @@ class StrategyEngine:
 
     async def _place_buy(self, symbol: str, amount_fiat: float,
                          price: float, ticker: TickerData, label: str):
+        if symbol not in self.states:
+            self.states[symbol] = SymbolState()
+        st = self.states[symbol]
+        if st.order_pending:
+            logger.warning(f"BUY {symbol} rejected: order already pending")
+            return
+        st.order_pending = True
         amount_crypto = amount_fiat / price
         logger.info(f"BUY  {symbol} | {label} | ${amount_fiat:.2f} @ {price:.4f}")
         await self.order_queue.put((
@@ -284,27 +292,19 @@ class StrategyEngine:
                         fiat_currency=self.fiat_currency, amount=amount_crypto),
             ticker
         ))
-        st = self.states[symbol]
-        st.last_buy_price   = price
-        if st.dca_layer == 0:
-            st.price_high = price
-            st.price_low = price
-            st.entry_grid = self._grid_spacing(symbol)
-        else:
-            st.price_high = max(st.price_high, price)
-            st.price_low = min(st.price_low, price)
-            
-        st.dca_layer       += 1
-        st.trail_high       = max(st.trail_high, price)
-        st.last_trade_ts    = datetime.now(timezone.utc).timestamp()
-        await self._persist_state(symbol)
 
     async def _place_sell(self, symbol: str, amount_crypto: float,
                           price: float, ticker: TickerData, label: str):
         if amount_crypto <= 0:
             return
             
+        if symbol not in self.states:
+            self.states[symbol] = SymbolState()
         st = self.states[symbol]
+        if st.order_pending:
+            logger.warning(f"SELL {symbol} rejected: order already pending")
+            return
+        st.order_pending = True
         mfe = (st.price_high - st.avg_entry) / st.avg_entry * 100 if st.avg_entry > 0 else 0.0
         mae = (st.avg_entry - st.price_low) / st.avg_entry * 100 if st.avg_entry > 0 else 0.0
 
@@ -315,9 +315,40 @@ class StrategyEngine:
                         mfe=mfe, mae=mae),
             ticker
         ))
-        st.last_trade_ts = datetime.now(timezone.utc).timestamp()
+
+    async def on_order_completed(self, symbol: str, side: str, amount: float,
+                                price: float, is_success: bool, label: str = ""):
+        st = self.states.get(symbol)
+        if not st:
+            return
+            
+        st.order_pending = False
         
-        await self._persist_state(symbol)
+        if not is_success:
+            logger.error(f"{symbol}: Trade execution failed or was rejected ({label}). State unmutated.")
+            return
+
+        if side == 'buy':
+            st.last_buy_price = price
+            if st.dca_layer == 0:
+                st.price_high = price
+                st.price_low = price
+                st.entry_grid = self._grid_spacing(symbol)
+            else:
+                st.price_high = max(st.price_high, price)
+                st.price_low = min(st.price_low, price)
+                
+            st.dca_layer += 1
+            st.trail_high = max(st.trail_high, price)
+            st.last_trade_ts = datetime.now(timezone.utc).timestamp()
+            await self._persist_state(symbol)
+
+        elif side == 'sell':
+            st.last_trade_ts = datetime.now(timezone.utc).timestamp()
+            if label in ["STOP-LOSS", "FLASH CRASH EXIT", "PANIC SELL", "FULL EXIT"]:
+                self._reset_position(symbol, cooldown=True)
+            else:
+                await self._persist_state(symbol)
 
     def _reset_position(self, symbol: str, cooldown: bool = True):
         st = self.states[symbol]
@@ -517,6 +548,12 @@ class StrategyEngine:
 
                 # Honour active ban
                 if st.blacklist_until > now_ts:
+                    self.data_queue.task_done()
+                    continue
+
+                # Guard against in-flight pending order
+                if st.order_pending:
+                    logger.debug(f"{symbol}: Order pending in-flight — skipping signal evaluation")
                     self.data_queue.task_done()
                     continue
 

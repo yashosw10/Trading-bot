@@ -5,7 +5,6 @@ import { api } from "@/lib/api";
 import { QUERY_KEYS } from "@/lib/queryKeys";
 import { ComposedChart, Line, Bar, XAxis, YAxis, Tooltip, ResponsiveContainer, CartesianGrid, ReferenceLine } from "recharts";
 import { BarChart2, TrendingUp, AlertTriangle, ExternalLink } from "lucide-react";
-import { formatCurrency } from "@/lib/utils";
 import CustomSelect from "../ui/CustomSelect";
 import { useMemo, useState } from "react";
 
@@ -169,9 +168,10 @@ export default function OhlcvChart({ activeCoin = "BTC/USDT" }: { activeCoin?: s
                 itemStyle={{ color: '#fff', fontWeight: 'bold' }}
                 labelStyle={{ color: '#888', marginBottom: '8px' }}
                 labelFormatter={(label, payload) => payload && payload.length > 0 ? payload[0].payload.fullTime : label}
-                formatter={(value: number, name: string) => {
-                  if (name === 'close') return [`$${value.toLocaleString(undefined, { minimumFractionDigits: 2, maximumFractionDigits: 4 })}`, 'Price'];
-                  if (name === 'volume') return [value.toLocaleString(undefined, { maximumFractionDigits: 2 }), 'Volume'];
+                formatter={(value: any, name: any) => {
+                  const valNum = Number(value || 0);
+                  if (name === 'close') return [`$${valNum.toLocaleString(undefined, { minimumFractionDigits: 2, maximumFractionDigits: 4 })}`, 'Price'];
+                  if (name === 'volume') return [valNum.toLocaleString(undefined, { maximumFractionDigits: 2 }), 'Volume'];
                   return [value, name];
                 }}
               />
@@ -208,21 +208,36 @@ export default function OhlcvChart({ activeCoin = "BTC/USDT" }: { activeCoin?: s
                 </>
               )}
               
-              {trades && trades
+              {trades && chartData.length > 0 && trades
                 .filter(t => t.symbol === activeCoin)
                 .map(t => {
-                  const timeStr = new Date(t.timestamp).toLocaleTimeString([], { hour: '2-digit', minute: '2-digit' });
+                  const isBuy = t.side?.toUpperCase() === 'BUY';
+                  const tradeTs = new Date(t.timestamp).getTime();
+                  // Snap to closest chartData point to ensure ReferenceLine renders on X-axis tick
+                  const closest = chartData.reduce((prev: any, curr: any) => {
+                    const prevDiff = Math.abs(new Date(prev.timestamp).getTime() - tradeTs);
+                    const currDiff = Math.abs(new Date(curr.timestamp).getTime() - tradeTs);
+                    return currDiff < prevDiff ? curr : prev;
+                  }, chartData[0]);
+
+                  // Only show marker if within the timeframe of current chart view
+                  const minChartTs = new Date(chartData[0].timestamp).getTime();
+                  const maxChartTs = new Date(chartData[chartData.length - 1].timestamp).getTime();
+                  if (tradeTs < minChartTs - 300000 || tradeTs > maxChartTs + 300000) return null;
+
+                  const priceLabel = t.price ? `@ $${Number(t.price).toFixed(2)}` : '';
+
                   return (
                     <ReferenceLine
-                      key={t.timestamp}
-                      x={timeStr}
+                      key={`${t.timestamp}-${t.side}-${t.price}`}
+                      x={closest.time}
                       yAxisId="price"
-                      stroke={t.side === 'BUY' ? '#22c55e' : '#ef4444'}
+                      stroke={isBuy ? '#22c55e' : '#ef4444'}
                       strokeDasharray="3 3"
                       label={{ 
-                        position: 'top',
-                        value: t.side === 'BUY' ? '▲ BUY' : '▼ SELL', 
-                        fill: t.side === 'BUY' ? '#22c55e' : '#ef4444', 
+                        position: isBuy ? 'insideBottomLeft' : 'top',
+                        value: `${isBuy ? '▲ BUY' : '▼ SELL'} ${priceLabel}`.trim(), 
+                        fill: isBuy ? '#22c55e' : '#ef4444', 
                         fontSize: 10,
                         fontWeight: 'bold'
                       }}
