@@ -34,10 +34,10 @@ GRID_TIGHT           = 0.030  # 3.0 % grid when low volatility
 GRID_WIDE            = 0.050  # 5.0 % grid when high volatility
 BB_VOLATILITY_THRESH = 0.020  # BBW above this → wide grid
 
-# Take-profit tranches (must sum to 1.0)
-TP_TRANCHE_1_PCT     = 0.40   # sell 40 % at 1× grid above avg entry
-TP_TRANCHE_2_PCT     = 0.35   # sell 35 % at 2× grid above avg entry
-
+# ATR-scaled Trailing Take-Profit
+ATR_PERIOD           = 14
+ATR_ACTIVATION_MULT  = 2.0    # Activate trailing stop when price > avg_entry + (ATR * MULT)
+ATR_TRAIL_MULT       = 1.0    # Trail price by (ATR * MULT)
 PER_TRADE_STOP_PCT   = 0.08   # Per-symbol stop-loss: exit if price < avg_entry × (1 − this)
 
 REENTRY_COOLDOWN_S   = 120    # 2-min cooldown after any TP or stop-loss exit (was 300s — too slow)
@@ -50,8 +50,9 @@ PANIC_SELL_STAGGER_S = 30     # Seconds between each staggered panic-sell order
 #  Indicator helpers
 # ─────────────────────────────────────────────
 
-def _calc_ema(prices: list[float], period: int) -> float:
+def _calc_ema(candles: list[dict], period: int) -> float:
     """EMA over a list (oldest → newest). Falls back to SMA if too few points."""
+    prices = [c["close"] for c in candles]
     if not prices:
         return 0.0
     if len(prices) < period:
@@ -63,11 +64,12 @@ def _calc_ema(prices: list[float], period: int) -> float:
     return ema
 
 
-def _calc_rsi(closes: list[float], period: int) -> float:
+def _calc_rsi(candles: list[dict], period: int) -> float:
     """
     Wilder RSI.  Uses simple average for the seed, then applies Wilder smoothing
     for any bars beyond the seed window.  Returns 50.0 (neutral) if not enough data.
     """
+    closes = [c["close"] for c in candles]
     if len(closes) < period + 1:
         return 50.0
     deltas = [closes[i] - closes[i - 1] for i in range(1, len(closes))]
@@ -83,6 +85,26 @@ def _calc_rsi(closes: list[float], period: int) -> float:
         return 100.0
     return 100.0 - (100.0 / (1.0 + avg_gain / avg_loss))
 
+def _calc_atr(candles: list[dict], period: int) -> float:
+    """Calculate Average True Range (ATR)."""
+    if len(candles) < period + 1:
+        return 0.0
+    
+    true_ranges = []
+    for i in range(1, len(candles)):
+        c = candles[i]
+        prev_close = candles[i-1]["close"]
+        tr = max(
+            c["high"] - c["low"],
+            abs(c["high"] - prev_close),
+            abs(c["low"] - prev_close)
+        )
+        true_ranges.append(tr)
+    
+    # Simple Moving Average for ATR (commonly used)
+    recent_tr = true_ranges[-period:]
+    return sum(recent_tr) / period
+
 
 # ─────────────────────────────────────────────
 #  Candle aggregator
@@ -90,33 +112,45 @@ def _calc_rsi(closes: list[float], period: int) -> float:
 
 class _CandleAggregator:
     """
-    Rolls up raw 5-second price ticks into completed 1-minute candles using
-    wall-clock deadlines — no silent gaps if a tick happens to straddle a
-    minute boundary.
+    Rolls up raw 5-second price ticks into completed 1-minute OHLC candles using
+    wall-clock deadlines.
     """
 
     def __init__(self):
-        self._close    = None
+        self._open = None
+        self._high = None
+        self._low = None
+        self._close = None
         self._deadline = None
 
-    def feed(self, price: float, ts: datetime) -> float | None:
+    def feed(self, price: float, ts: datetime) -> dict | None:
         """
-        Feed one raw tick.  Returns the completed candle's close price when a
+        Feed one raw tick. Returns the completed OHLC dict when a
         minute boundary is crossed, otherwise None.
         """
         now = ts.timestamp()
         if self._deadline is None:
             self._deadline = now + CANDLE_INTERVAL_S
-            self._close = price
+            self._open = self._high = self._low = self._close = price
             return None
+            
         if now < self._deadline:
+            if price > self._high: self._high = price
+            if price < self._low: self._low = price
             self._close = price
             return None
+            
         # Candle complete
-        close = self._close
-        self._close    = price
+        completed_candle = {
+            "open": self._open,
+            "high": self._high,
+            "low": self._low,
+            "close": self._close
+        }
+        
+        self._open = self._high = self._low = self._close = price
         self._deadline = now + CANDLE_INTERVAL_S
-        return close
+        return completed_candle
 
 
 # ─────────────────────────────────────────────
@@ -145,10 +179,9 @@ class SymbolState:
         self.price_low: float       = 0.0   # lowest price during position lifetime (MAE)
         self.last_trade_ts: float   = 0.0   # timestamp of the last buy or partial sell
 
-        # ── Take-profit tranche flags ──
-        self.tp1_done: bool    = False
-        self.tp2_done: bool    = False
-        self.trail_high: float = 0.0        # highest price seen after TP1; drives trailing stop
+        # ── Take-profit trailing flags ──
+        self.ttp_active: bool  = False
+        self.trail_high: float = 0.0        # highest price seen after TTP activation
 
         # ── Cooldown / ban ──
         self.reentry_until: float          = 0.0
@@ -166,9 +199,7 @@ class SymbolState:
             "last_buy_price": self.last_buy_price,
             "entry_grid": self.entry_grid,
             "price_high": self.price_high,
-            "price_low": self.price_low,
-            "tp1_done": self.tp1_done,
-            "tp2_done": self.tp2_done,
+            "ttp_active": self.ttp_active,
             "trail_high": self.trail_high,
             "reentry_until": self.reentry_until,
             "blacklist_until": self.blacklist_until,
@@ -185,9 +216,7 @@ class SymbolState:
         self.last_buy_price = data.get("last_buy_price", 0.0)
         self.entry_grid = data.get("entry_grid", 0.0)
         self.price_high = data.get("price_high", 0.0)
-        self.price_low = data.get("price_low", 0.0)
-        self.tp1_done = data.get("tp1_done", False)
-        self.tp2_done = data.get("tp2_done", False)
+        self.ttp_active = data.get("ttp_active", False)
         self.trail_high = data.get("trail_high", 0.0)
         self.reentry_until = data.get("reentry_until", 0.0)
         self.blacklist_until = data.get("blacklist_until", 0.0)
@@ -231,9 +260,10 @@ class StrategyEngine:
         exit too early during high-volatility regimes.
         """
         candles = list(self.states[symbol].candles)
-        if len(candles) < BB_PERIOD:
+        closes = [c["close"] for c in candles]
+        if len(closes) < BB_PERIOD:
             return GRID_TIGHT
-        recent = candles[-BB_PERIOD:]
+        recent = closes[-BB_PERIOD:]
         sma = sum(recent) / BB_PERIOD
         if sma == 0:
             return GRID_TIGHT
@@ -242,10 +272,10 @@ class StrategyEngine:
         base_grid = GRID_WIDE if bb_width > BB_VOLATILITY_THRESH else GRID_TIGHT
         return max(base_grid, 0.5 * bb_width)
 
-    def _indicators(self, symbol: str) -> tuple[float, float]:
-        """Return (ema, rsi) computed on the 1-min candle history."""
+    def _indicators(self, symbol: str) -> tuple[float, float, float]:
+        """Return (ema, rsi, atr) computed on the 1-min candle history."""
         candles = list(self.states[symbol].candles)
-        return _calc_ema(candles, EMA_PERIOD), _calc_rsi(candles, RSI_PERIOD)
+        return _calc_ema(candles, EMA_PERIOD), _calc_rsi(candles, RSI_PERIOD), _calc_atr(candles, ATR_PERIOD)
 
     def _passes_entry_gate(self, symbol: str) -> bool:
         """
@@ -255,7 +285,7 @@ class StrategyEngine:
         """
         st = self.states[symbol]
         price = st.raw_prices[-1] if st.raw_prices else 0.0
-        ema, rsi = self._indicators(symbol)
+        ema, rsi, atr = self._indicators(symbol)
         if price <= ema:
             logger.debug(f"{symbol}: trend FAIL  price={price:.4f} EMA={ema:.4f}")
             return False
@@ -661,57 +691,32 @@ class StrategyEngine:
                         await self._place_buy(symbol, amount_fiat, price, ticker, f"DCA Layer {n + 1}")
 
                 # ════════════════════════════════════════════════════
-                #  EXECUTION — Take-profit tranches
-                #
-                #  Tranche 1 (40 %) — 1× grid above avg entry
-                #  Tranche 2 (35 %) — 2× grid above avg entry
-                #  Tranche 3 (25 %) — trailing stop: 0.8× grid below trail_high
-                #
-                #  entry_grid is used (not live grid) so targets don't shift
-                #  mid-position if volatility changes after entry.
+                #  EXECUTION — ATR-Scaled Trailing Take-Profit (Phase 3)
                 # ════════════════════════════════════════════════════
                 elif st.dca_layer > 0 and st.avg_entry > 0:
-                    g = st.entry_grid
-                    hours_stuck = (now_ts - st.last_trade_ts) / 3600.0 if st.last_trade_ts > 0 else 0.0
-
-                    if hours_stuck > 72.0:
-                        logger.warning(f"TIME STOP {symbol} | Stuck for >72h | Exiting at market")
-                        await self._place_sell(symbol, st.position_amount, price, ticker, "TIME-STOP")
-                        self._reset_position(symbol, cooldown=True)
-                        self.data_queue.task_done()
-                        continue
-
-                    if not st.tp1_done:
-                        if hours_stuck > 24.0:
-                            decay_factor = min(1.0, (hours_stuck - 24.0) / 48.0)
-                            target_multiplier = 1 + (g * (1 - decay_factor)) + (0.002 * decay_factor)
-                        else:
-                            target_multiplier = 1 + g
-
-                        # FIX: the sell + state updates were previously
-                        # dedented out of this `if`, causing an
-                        # UnboundLocalError on `sell_amt` every tick the
-                        # price target was NOT met, silently swallowed by
-                        # the outer try/except in the main loop.
-                        if price >= st.avg_entry * target_multiplier:
-                            sell_amt = st.position_amount * TP_TRANCHE_1_PCT
-                            await self._place_sell(symbol, sell_amt, price, ticker, "TP1 — 40%")
-                            st.tp1_done   = True
+                    _, _, atr = self._indicators(symbol)
+                    
+                    if atr > 0:
+                        activation_price = st.avg_entry + (atr * ATR_ACTIVATION_MULT)
+                        trail_offset = atr * ATR_TRAIL_MULT
+                        
+                        # 1. Check for activation
+                        if not st.ttp_active and price >= activation_price:
+                            st.ttp_active = True
                             st.trail_high = price
-
-                    elif st.tp1_done and not st.tp2_done and price >= st.avg_entry * (1 + 2 * g):
-                        sell_amt = st.position_amount * TP_TRANCHE_2_PCT
-                        await self._place_sell(symbol, sell_amt, price, ticker, "TP2 — 35%")
-                        st.tp2_done   = True
-                        st.trail_high = max(st.trail_high, price)
-
-                    elif st.tp2_done and st.position_amount > 0:
-                        st.trail_high = max(st.trail_high, price)
-                        trail_stop    = st.trail_high * (1 - 0.8 * g)
-                        if price <= trail_stop:
-                            await self._place_sell(symbol, st.position_amount, price, ticker, "TP3 — trailing stop 25%")
-                            self._reset_position(symbol, cooldown=True)
-                            logger.info(f"{symbol}: full cycle complete.")
+                            logger.info(f"{symbol}: TTP Activated at {price:.4f} (ATR={atr:.4f})")
+                            
+                        # 2. Update trailing high and check for stop-out
+                        if st.ttp_active:
+                            st.trail_high = max(st.trail_high, price)
+                            trail_stop = st.trail_high - trail_offset
+                            
+                            if price <= trail_stop:
+                                await self._place_sell(symbol, st.position_amount, price, ticker, "DYNAMIC TRAILING TP")
+                                self._reset_position(symbol, cooldown=True)
+                                logger.info(f"{symbol}: full cycle complete.")
+                                self.data_queue.task_done()
+                                continue
 
                 self.data_queue.task_done()
 

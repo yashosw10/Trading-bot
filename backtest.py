@@ -10,9 +10,12 @@ from strategy import (
     EMA_PERIOD, RSI_PERIOD, BB_PERIOD, BB_VOLATILITY_THRESH,
     RSI_ENTRY_GATE, RSI_DCA_SKIP_LOW, RSI_DCA_SKIP_HIGH,
     GRID_TIGHT, GRID_WIDE, MAX_DCA_LAYERS, BASE_ORDER, VOLUME_MULTIPLIER,
-    TP_TRANCHE_1_PCT, TP_TRANCHE_2_PCT,
     PER_TRADE_STOP_PCT,
 )
+
+# Static Ladder benchmark constants
+TP_TRANCHE_1_PCT = 0.40
+TP_TRANCHE_2_PCT = 0.35
 
 DB_PATH = "history.db"
 
@@ -118,7 +121,11 @@ def _load_local(symbol: str, interval: str, limit: int = None, start_time_ms: in
         return None
 
 
-async def run_backtest(symbol: str, interval: str, limit: int = None, config: dict = None, start_time_ms: int = None, end_time_ms: int = None, exit_mode: str = "STATIC_LADDER"):
+async def run_backtest(symbol: str, interval: str, limit: int | None, config: dict,
+                       start_time_ms: int = None, end_time_ms: int = None,
+                       exit_mode: str = "STATIC_LADDER",
+                       atr_activation_mult: float = 2.0,
+                       atr_trail_mult: float = 1.0) -> dict | None:
     if config is None: config = {}
     
     # ── Dynamic config overrides, matching what the live bot pulls from DB ──
@@ -152,6 +159,7 @@ async def run_backtest(symbol: str, interval: str, limit: int = None, config: di
     df.ta.ema(length=EMA_PERIOD, append=True)
     df.ta.rsi(length=RSI_PERIOD, append=True)
     df.ta.bbands(length=BB_PERIOD, append=True)
+    df.ta.atr(length=14, append=True)
     df = df.dropna()
 
     if len(df) == 0:
@@ -161,10 +169,11 @@ async def run_backtest(symbol: str, interval: str, limit: int = None, config: di
     # (e.g. "BBU_20_2.0" vs "BBU_20_2_0") has varied across versions.
     ema_col = f"EMA_{EMA_PERIOD}"
     rsi_col = f"RSI_{RSI_PERIOD}"
+    atr_col = "ATRr_14"
     bbu_col = next((c for c in df.columns if c.startswith("BBU_")), None)
     bbl_col = next((c for c in df.columns if c.startswith("BBL_")), None)
     bbm_col = next((c for c in df.columns if c.startswith("BBM_")), None)
-    if not all([ema_col in df.columns, rsi_col in df.columns, bbu_col, bbl_col, bbm_col]):
+    if not all([ema_col in df.columns, rsi_col in df.columns, atr_col in df.columns, bbu_col, bbl_col, bbm_col]):
         logger.error(f"Expected indicator columns missing. Got columns: {list(df.columns)}")
         return None
 
@@ -220,6 +229,7 @@ async def run_backtest(symbol: str, interval: str, limit: int = None, config: di
         price = row["close"]
         ema = row[ema_col]
         rsi = row[rsi_col]
+        atr = row[atr_col]
         bb_upper, bb_lower, bb_mid = row[bbu_col], row[bbl_col], row[bbm_col]
 
         bb_width = (bb_upper - bb_lower) / bb_mid if bb_mid > 0 else 0
@@ -345,27 +355,28 @@ async def run_backtest(symbol: str, interval: str, limit: int = None, config: di
                         cooldown_remaining = reentry_cooldown_bars
             
             elif exit_mode == "DYNAMIC_TRAILING":
-                # Activation Threshold: +1.5%
-                if price > avg_entry * 1.015:
-                    if not tp1_done:  # Use tp1_done as boolean flag for 'trail activated'
+                if atr > 0:
+                    activation_price = avg_entry + (atr * atr_activation_mult)
+                    trail_offset = atr * atr_trail_mult
+                    
+                    if not tp1_done and price >= activation_price:
                         tp1_done = True
                         trail_high = price
-                    else:
+                    
+                    if tp1_done:
                         trail_high = max(trail_high, price)
-                
-                if tp1_done:
-                    # Trail Offset: -0.5%
-                    trail_stop = trail_high * (1 - 0.005)
-                    if price <= trail_stop:
-                        _record_sell(position_amount, price, "TTP-trailing-exit", i)
-                        dca_layer = 0
-                        avg_entry = 0.0
-                        tp1_done = tp2_done = False
-                        trail_high = 0.0
-                        last_buy_price = 0.0
-                        entry_grid = 0.0
-                        entry_bar_idx = None
-                        cooldown_remaining = reentry_cooldown_bars
+                        trail_stop = trail_high - trail_offset
+                        
+                        if price <= trail_stop:
+                            _record_sell(position_amount, price, "TTP-trailing-exit", i)
+                            dca_layer = 0
+                            avg_entry = 0.0
+                            tp1_done = tp2_done = False
+                            trail_high = 0.0
+                            last_buy_price = 0.0
+                            entry_grid = 0.0
+                            entry_bar_idx = None
+                            cooldown_remaining = reentry_cooldown_bars
 
         equity = balance + position_amount * price
         peak_balance = max(peak_balance, equity)
