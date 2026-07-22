@@ -29,6 +29,56 @@ async def daily_summary_loop(shutdown_event: asyncio.Event):
         await utils.send_daily_summary()
 
 
+async def position_reconciliation_loop(shutdown_event: asyncio.Event):
+    # wait 60s before first run to let bot settle
+    try:
+        await asyncio.wait_for(shutdown_event.wait(), timeout=60.0)
+        return
+    except asyncio.TimeoutError:
+        pass
+
+    while not shutdown_event.is_set():
+        try:
+            config = await database.get_bot_config()
+            if config.get("mode", "paper") == "live":
+                from exchange import CoinDCXClient
+                client = CoinDCXClient()
+                live_balances = await client.get_balances()
+                if isinstance(live_balances, list):
+                    exchange_assets = {b.get("currency"): float(b.get("balance", 0.0)) for b in live_balances}
+                    
+                    symbols_to_check = config.get("symbols", [])
+                    for symbol in symbols_to_check:
+                        # e.g. BTC/USDT -> base = BTC
+                        base_asset = symbol.split('/')[0] if '/' in symbol else symbol
+                        db_pos = await database.get_position(symbol, mode="live")
+                        db_amount = float(db_pos.get("amount", 0.0)) if db_pos else 0.0
+                        
+                        exchange_amount = exchange_assets.get(base_asset, 0.0)
+                        
+                        min_quantity = await client.get_min_quantity_for_symbol(symbol)
+                        
+                        # drift > 0.5% of db_amount, floored at 2x exchange minimum dust
+                        drift = abs(exchange_amount - db_amount)
+                        threshold = max(min_quantity * 2, db_amount * 0.005)
+                        
+                        if drift > threshold:
+                            logger.error(f"POSITION DRIFT DETECTED for {symbol}! DB: {db_amount}, Exchange: {exchange_amount}")
+                            # Pause trading by updating config in DB
+                            config["is_paused"] = True
+                            await database.update_bot_config(config)
+                            logger.error("Trading has been PAUSED to prevent further drift. Manual intervention required.")
+                            
+        except Exception as e:
+            logger.error(f"Reconciliation error: {e}")
+            
+        try:
+            await asyncio.wait_for(shutdown_event.wait(), timeout=300.0) # Run every 5 mins
+            break
+        except asyncio.TimeoutError:
+            pass
+
+
 @asynccontextmanager
 async def lifespan(app: FastAPI):
     import os
@@ -60,17 +110,25 @@ async def lifespan(app: FastAPI):
     app.state.strategy_task = asyncio.create_task(strategy.start(shutdown_event))
     app.state.order_manager_task = asyncio.create_task(order_manager.start(shutdown_event))
     app.state.daily_summary_task = asyncio.create_task(daily_summary_loop(shutdown_event))
+    app.state.reconciliation_task = asyncio.create_task(position_reconciliation_loop(shutdown_event))
     
     yield
     
     logger.warning("FastAPI shutdown! Gracefully stopping bot components...")
     shutdown_event.set()
     
-    for task in [app.state.streamer_task, app.state.strategy_task, app.state.order_manager_task, app.state.daily_summary_task]:
+    tasks = [
+        app.state.streamer_task, 
+        app.state.strategy_task, 
+        app.state.order_manager_task, 
+        app.state.daily_summary_task,
+        app.state.reconciliation_task
+    ]
+    for task in tasks:
         if not task.done():
             task.cancel()
             
-    await asyncio.gather(app.state.streamer_task, app.state.strategy_task, app.state.order_manager_task, app.state.daily_summary_task, return_exceptions=True)
+    await asyncio.gather(*tasks, return_exceptions=True)
     logger.info("Bot shutdown complete.")
 
 app = FastAPI(title="Trading Bot API", lifespan=lifespan)
@@ -622,5 +680,5 @@ async def get_latest_backtest():
         async with db.execute('SELECT * FROM backtest_results WHERE is_mock = 0 ORDER BY timestamp DESC LIMIT 1') as cur:
             row = await cur.fetchone()
             if not row:
-                raise HTTPException(status_code=404, detail="No backtest results found")
+                return None
             return dict(row)

@@ -137,7 +137,7 @@ export default function AnalyticsCards() {
     },
     {
       title: "Max Drawdown",
-      value: `-${stats.maxDD.toFixed(2)}%`,
+      value: stats.maxDD < 0.005 ? "0.00%" : `-${stats.maxDD.toFixed(2)}%`,
       icon: AlertTriangle,
       color: "text-red-500",
       bg: "bg-red-500/10"

@@ -10,7 +10,7 @@ from strategy import (
     EMA_PERIOD, RSI_PERIOD, BB_PERIOD, BB_VOLATILITY_THRESH,
     RSI_ENTRY_GATE, RSI_DCA_SKIP_LOW, RSI_DCA_SKIP_HIGH,
     GRID_TIGHT, GRID_WIDE, MAX_DCA_LAYERS, BASE_ORDER, VOLUME_MULTIPLIER,
-    TP_TRANCHE_1_PCT, TP_TRANCHE_2_PCT, TP_TRANCHE_3_PCT,
+    TP_TRANCHE_1_PCT, TP_TRANCHE_2_PCT,
     PER_TRADE_STOP_PCT,
 )
 
@@ -86,6 +86,8 @@ def _load_local(symbol: str, interval: str, limit: int = None, start_time_ms: in
                 for r in rows
             ]
         else:
+            # Data in history.db is namespaced with BINANCE: prefix
+            namespaced_symbol = f"BINANCE:{symbol}" if not symbol.startswith("BINANCE:") else symbol
             cursor.execute(
                 """
                 SELECT timestamp, open, high, low, close, volume
@@ -93,7 +95,7 @@ def _load_local(symbol: str, interval: str, limit: int = None, start_time_ms: in
                 WHERE symbol = ? AND interval = ?
                 ORDER BY timestamp DESC LIMIT ?
                 """,
-                (symbol, interval, limit),
+                (namespaced_symbol, interval, limit),
             )
             rows = cursor.fetchall()
             conn.close()
@@ -353,7 +355,6 @@ async def run_backtest(symbol: str, interval: str, limit: int = None, config: di
 
     total_return_pct = ((balance - initial_balance) / initial_balance) * 100
     wins = sum(1 for t in trades if t["pnl"] > 0)
-    losses = sum(1 for t in trades if t["pnl"] <= 0)
     gross_profit = sum(t["pnl"] for t in trades if t["pnl"] > 0)
     gross_loss = abs(sum(t["pnl"] for t in trades if t["pnl"] < 0))
     win_rate = (wins / len(trades)) if trades else 0

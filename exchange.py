@@ -37,6 +37,15 @@ class CoinDCXClient:
             except Exception as e:
                 logger.error(f"Error fetching market details: {e}")
 
+    async def get_min_quantity_for_symbol(self, symbol: str) -> float:
+        raw_symbol = symbol.replace("/", "")
+        if raw_symbol not in self._market_details:
+            await self._fetch_market_details(force=True)
+        market_info = self._market_details.get(raw_symbol)
+        if market_info:
+            return market_info.get("min_quantity", 0.0)
+        return 0.0
+
     def _generate_headers(self, body):
         secret_bytes = bytes(self.api_secret, encoding='utf8')
         json_body = json.dumps(body, separators=(',', ':'))

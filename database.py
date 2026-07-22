@@ -425,13 +425,15 @@ async def upsert_strategy_state(symbol: str, state_json: str):
         ''', (symbol, state_json))
         await db.commit()
 
-async def load_strategy_state(symbol: str) -> str:
+
+
+async def get_all_strategy_states() -> dict[str, str]:
+    states = {}
     async with get_db_conn() as db:
-        async with db.execute('SELECT state_json FROM strategy_state WHERE symbol = ?', (symbol,)) as cur:
-            row = await cur.fetchone()
-            if row:
-                return row['state_json']
-    return None
+        async with db.execute('SELECT symbol, state_json FROM strategy_state') as cur:
+            async for row in cur:
+                states[row['symbol']] = row['state_json']
+    return states
 
 
 async def get_fx_rate(currency: str) -> float:

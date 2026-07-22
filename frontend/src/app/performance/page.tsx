@@ -8,6 +8,7 @@ import MonthlyHeatmap from "@/components/dashboard/MonthlyHeatmap";
 import DrawdownChart from "@/components/dashboard/DrawdownChart";
 import BacktestViewer from "@/components/dashboard/BacktestViewer";
 import PerSymbolBreakdown from "@/components/dashboard/PerSymbolBreakdown";
+import DailyPnLChart from "@/components/dashboard/DailyPnLChart";
 
 export default function PerformancePage() {
   return (
@@ -30,6 +31,7 @@ export default function PerformancePage() {
           <EquityCurve />
           <DrawdownChart />
         </div>
+        <DailyPnLChart />
         <PerSymbolBreakdown />
         <BacktestViewer />
         <MonthlyHeatmap />
