@@ -415,11 +415,8 @@ class StrategyEngine:
     #  Main event loop
     # ══════════════════════════════════════════
 
-    async def start(self, shutdown_event: asyncio.Event):
-        logger.info("Starting Volatility-Adjusted DCA Hybrid Engine (v3 — merged)...")
-
-        config = await database.get_bot_config()
-        active_mode = config.get("mode", "paper")
+    async def _sync_starting_balance(self, active_mode: str):
+        """Fetches the current wallet balance to establish the daily baseline."""
         self.starting_balance = await database.get_balance(self.fiat_currency, mode=active_mode)
         if active_mode == "live":
             try:
@@ -437,6 +434,14 @@ class StrategyEngine:
                                 self.starting_balance = b_amt
             except Exception as e:
                 logger.error(f"Failed to fetch live starting balance: {e}")
+
+    async def start(self, shutdown_event: asyncio.Event):
+        logger.info("Starting Volatility-Adjusted DCA Hybrid Engine (v3 — merged)...")
+
+        config = await database.get_bot_config()
+        active_mode = config.get("mode", "paper")
+        
+        await self._sync_starting_balance(active_mode)
         
         global_kill_pct = config.get("daily_loss_limit", 15.0) / 100.0
         
@@ -449,7 +454,7 @@ class StrategyEngine:
 
         self.peak_equity = self.starting_balance
         self.start_ts = datetime.now(timezone.utc).timestamp()
-        self.last_reset_ts = self.start_ts
+        self.last_balance_reset_day = datetime.now(timezone.utc).date()
 
         # ── Hydrate all SymbolStates on boot ──────────────────────────
         import json
@@ -465,6 +470,15 @@ class StrategyEngine:
 
         while not shutdown_event.is_set():
             try:
+                now_utc = datetime.now(timezone.utc)
+                if now_utc.date() > self.last_balance_reset_day:
+                    config = await database.get_bot_config()
+                    active_mode = config.get("mode", "paper")
+                    logger.info(f"Rolling 24h UTC window reset: updating starting_balance and peak_equity for {now_utc.date()}.")
+                    await self._sync_starting_balance(active_mode)
+                    self.peak_equity = self.starting_balance
+                    self.last_balance_reset_day = now_utc.date()
+
                 config = await database.get_bot_config()
                 global_kill_pct = config.get("daily_loss_limit", 15.0) / 100.0
                 is_paused = config.get("is_paused", False)
@@ -486,24 +500,6 @@ class StrategyEngine:
                 symbol  = ticker.symbol
                 price   = ticker.price_usd
                 now_ts  = datetime.now(timezone.utc).timestamp()
-
-                # ── Rolling 24h Daily Reset ───────────────────────────
-                if now_ts - getattr(self, 'last_reset_ts', now_ts) >= 86400:
-                    session_pnl = await database.get_session_pnl(self.fiat_currency, self.start_ts, mode=active_mode)
-                    
-                    # Lock in the realized PnL to the baseline
-                    self.starting_balance += session_pnl
-                    self.start_ts = now_ts
-                    self.last_reset_ts = now_ts
-                    
-                    # Reset peak equity for the new 24h window
-                    total_unrealized = sum(
-                        s.position_amount * s.raw_prices[-1] - s.total_invested
-                        for s in self.states.values()
-                        if s.total_invested > 0 and s.raw_prices
-                    )
-                    self.peak_equity = self.starting_balance + total_unrealized
-                    logger.info(f"24H ROLLING RESET | New baseline balance: ${self.starting_balance:.2f}")
 
                 # ── Initialise state for new symbol ───────────────────
                 if symbol not in self.states:
