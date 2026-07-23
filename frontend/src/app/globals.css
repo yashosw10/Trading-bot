@@ -11,7 +11,7 @@
     --text-primary: #111111;
     --text-secondary: #333333;
     
-    --bg-gradient: radial-gradient(circle at 0% 0%, #a1c4fd 0%, transparent 50%), radial-gradient(circle at 100% 100%, #ff7bc5 0%, transparent 50%), radial-gradient(circle at 100% 0%, #c2e9fb 0%, transparent 50%), #fdfbfb;
+    --bg-gradient: radial-gradient(circle at 0% 0%, #a1c4fd 0%, #a1c4fd00 50%), radial-gradient(circle at 100% 100%, #ff7bc5 0%, #ff7bc500 50%), radial-gradient(circle at 100% 0%, #c2e9fb 0%, #c2e9fb00 50%), #fdfbfb;
   }
 
   .dark {
@@ -19,7 +19,7 @@
     --text-primary: #FFFFFF;
     --text-secondary: #DDDDDD;
     
-    --bg-gradient: radial-gradient(circle at 0% 0%, #1e1b4b 0%, transparent 50%), radial-gradient(circle at 100% 100%, #064e3b 0%, transparent 50%), radial-gradient(circle at 50% 50%, #312e81 0%, transparent 50%), #0f172a;
+    --bg-gradient: radial-gradient(circle at 0% 0%, #1e1b4b 0%, #1e1b4b00 50%), radial-gradient(circle at 100% 100%, #064e3b 0%, #064e3b00 50%), radial-gradient(circle at 50% 50%, #312e81 0%, #312e8100 50%), #0f172a;
   }
 }
 
