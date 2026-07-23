@@ -112,7 +112,7 @@ export default function PortfolioSummary({ currency }: { currency: Currency }) {
       label: "Total Profit",
       value: formatMoney(profitVal),
       icon: isProfit ? TrendingUp : TrendingDown,
-      color: isProfit ? "text-green-500" : "text-red-500",
+      color: isProfit ? "text-green-600 dark:text-green-400 dark:[text-shadow:0_0_8px_rgba(74,222,128,0.6)]" : "text-red-600 dark:text-red-400 dark:[text-shadow:0_0_8px_rgba(248,113,113,0.6)]",
       bg: isProfit ? "bg-green-500/10" : "bg-red-500/10",
       isProfitVal: true
     },
@@ -151,7 +151,7 @@ export default function PortfolioSummary({ currency }: { currency: Currency }) {
           {isLoading ? (
             <div className="h-8 w-24 rounded-lg glass-skeleton mt-auto relative" />
           ) : (
-            <h2 className="text-2xl font-bold tracking-tight relative mt-auto text-neutral-900 dark:text-neutral-50">
+            <h2 className="text-2xl font-bold tracking-tight relative mt-auto text-black dark:text-white">
               {m.value}
             </h2>
           )}
@@ -176,7 +176,7 @@ function PnLPill({ label, value, currency, isLoading }: { label: string, value: 
   return (
     <div className="liquid-glass-card p-4 rounded-xl border border-black/5 dark:border-white/5 flex items-center justify-between">
       <span className="text-sm font-medium text-neutral-500 dark:text-neutral-400">{label}</span>
-      <span className={`text-base font-bold font-mono ${isProfit ? 'text-green-500' : 'text-red-500'}`}>
+      <span className={`text-base font-bold font-mono ${isProfit ? 'text-green-600 dark:text-green-400 dark:[text-shadow:0_0_8px_rgba(74,222,128,0.6)]' : 'text-red-600 dark:text-red-400 dark:[text-shadow:0_0_8px_rgba(248,113,113,0.6)]'}`}>
         {isProfit ? '+' : ''}{currency} {Math.abs(value).toLocaleString(undefined, { minimumFractionDigits: 2, maximumFractionDigits: 2 })}
       </span>
     </div>

@@ -77,7 +77,7 @@ export default function ManualOrder() {
             type="text"
             value={symbol}
             onChange={(e) => setSymbol(e.target.value.toUpperCase())}
-            className="w-full bg-white dark:bg-[#1a1a1f] border border-black/5 dark:border-white/5 rounded-xl px-4 py-3 text-sm focus:outline-none focus:ring-2 focus:ring-purple-500/50 uppercase"
+            className="w-full bg-white/40 dark:bg-black/70 border border-white/20 dark:border-[rgba(100,255,255,0.2)] rounded-xl px-4 py-3 text-sm focus:outline-none focus:ring-2 focus:ring-purple-500/50 uppercase dark:text-white"
             placeholder="BTC/USDT"
           />
         </div>
@@ -89,7 +89,7 @@ export default function ManualOrder() {
             step="0.0001"
             value={amount}
             onChange={(e) => setAmount(e.target.value)}
-            className="w-full bg-white dark:bg-[#1a1a1f] border border-black/5 dark:border-white/5 rounded-xl px-4 py-3 text-sm focus:outline-none focus:ring-2 focus:ring-purple-500/50"
+            className="w-full bg-white/40 dark:bg-black/70 border border-white/20 dark:border-[rgba(100,255,255,0.2)] rounded-xl px-4 py-3 text-sm focus:outline-none focus:ring-2 focus:ring-purple-500/50 dark:text-white"
             placeholder="0.01"
           />
         </div>
@@ -102,9 +102,7 @@ export default function ManualOrder() {
           className={`w-full py-3 rounded-xl font-bold text-sm transition-all flex items-center justify-center gap-2
             ${!isValid || orderMutation.isPending 
               ? 'bg-black/5 dark:bg-white/5 text-neutral-400 cursor-not-allowed' 
-              : side === 'buy'
-                ? 'bg-green-500 hover:bg-green-600 text-white shadow-lg shadow-green-500/20'
-                : 'bg-red-500 hover:bg-red-600 text-white shadow-lg shadow-red-500/20'
+              : 'bg-[#224488] hover:bg-blue-800 text-white shadow-[0_0_10px_rgba(34,68,136,0.5)] dark:shadow-[0_0_15px_rgba(34,68,136,0.8)]'
             }`}
         >
           {orderMutation.isPending ? "Executing..." : `EXECUTE ${side.toUpperCase()}`}

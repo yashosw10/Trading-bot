@@ -90,34 +90,47 @@ async def init_db():
                 symbols TEXT DEFAULT 'BTC/USDT,ETH/USDT,BNB/USDT,SOL/USDT,XRP/USDT',
                 fee_rate REAL DEFAULT 0.001,
                 slippage_rate REAL DEFAULT 0.0005,
+                base_order REAL DEFAULT 100.0,
+                volume_multiplier REAL DEFAULT 1.35,
+                max_dca_layers INTEGER DEFAULT 4,
+                per_trade_stop_pct REAL DEFAULT 8.0,
+                rsi_entry_gate REAL DEFAULT 40.0,
+                grid_tight REAL DEFAULT 3.0,
+                grid_wide REAL DEFAULT 5.0,
+                tp_tranche_1_pct REAL DEFAULT 40.0,
+                tp_tranche_2_pct REAL DEFAULT 35.0,
+                auto_tune_enabled BOOLEAN DEFAULT 0,
                 updated_at TEXT DEFAULT (datetime('now'))
             )
-        ''')
-        try:
-            await db.execute("ALTER TABLE bot_config ADD COLUMN telegram_bot_token TEXT DEFAULT ''")
-        except Exception:
-            pass
-        try:
-            await db.execute("ALTER TABLE bot_config ADD COLUMN telegram_chat_id TEXT DEFAULT ''")
-        except Exception:
-            pass
-        try:
-            await db.execute("ALTER TABLE bot_config ADD COLUMN trade_alerts_enabled BOOLEAN DEFAULT 1")
-        except Exception:
-            pass
-        try:
-            await db.execute("ALTER TABLE bot_config ADD COLUMN daily_summary_enabled BOOLEAN DEFAULT 0")
-        except Exception:
-            pass
-        try:
-            await db.execute("ALTER TABLE bot_config ADD COLUMN symbols TEXT DEFAULT 'BTC/USDT,ETH/USDT,BNB/USDT,SOL/USDT,XRP/USDT'")
-        except Exception:
-            pass
-        try:
-            await db.execute("ALTER TABLE bot_config ADD COLUMN fee_rate REAL DEFAULT 0.001")
-            await db.execute("ALTER TABLE bot_config ADD COLUMN slippage_rate REAL DEFAULT 0.0005")
-        except Exception:
-            pass
+        '''
+        )
+        
+        # Safe migration for existing DB rows
+        migrations = [
+            "ALTER TABLE bot_config ADD COLUMN telegram_bot_token TEXT DEFAULT ''",
+            "ALTER TABLE bot_config ADD COLUMN telegram_chat_id TEXT DEFAULT ''",
+            "ALTER TABLE bot_config ADD COLUMN trade_alerts_enabled BOOLEAN DEFAULT 1",
+            "ALTER TABLE bot_config ADD COLUMN daily_summary_enabled BOOLEAN DEFAULT 0",
+            "ALTER TABLE bot_config ADD COLUMN symbols TEXT DEFAULT 'BTC/USDT,ETH/USDT,BNB/USDT,SOL/USDT,XRP/USDT'",
+            "ALTER TABLE bot_config ADD COLUMN fee_rate REAL DEFAULT 0.001",
+            "ALTER TABLE bot_config ADD COLUMN slippage_rate REAL DEFAULT 0.0005",
+            "ALTER TABLE bot_config ADD COLUMN base_order REAL DEFAULT 100.0",
+            "ALTER TABLE bot_config ADD COLUMN volume_multiplier REAL DEFAULT 1.35",
+            "ALTER TABLE bot_config ADD COLUMN max_dca_layers INTEGER DEFAULT 4",
+            "ALTER TABLE bot_config ADD COLUMN per_trade_stop_pct REAL DEFAULT 8.0",
+            "ALTER TABLE bot_config ADD COLUMN rsi_entry_gate REAL DEFAULT 40.0",
+            "ALTER TABLE bot_config ADD COLUMN grid_tight REAL DEFAULT 3.0",
+            "ALTER TABLE bot_config ADD COLUMN grid_wide REAL DEFAULT 5.0",
+            "ALTER TABLE bot_config ADD COLUMN tp_tranche_1_pct REAL DEFAULT 40.0",
+            "ALTER TABLE bot_config ADD COLUMN tp_tranche_2_pct REAL DEFAULT 35.0",
+            "ALTER TABLE bot_config ADD COLUMN auto_tune_enabled BOOLEAN DEFAULT 0"
+        ]
+        
+        for statement in migrations:
+            try:
+                await db.execute(statement)
+            except Exception:
+                pass
         
         # Insert default config row if empty
         await db.execute('INSERT OR IGNORE INTO bot_config (id) VALUES (1)')
@@ -373,32 +386,34 @@ async def execute_trade(symbol: str, side: str, fiat_currency: str, amount: floa
 
 async def get_bot_config() -> dict:
     async with get_db_conn() as db:
-        async with db.execute('SELECT daily_loss_limit, max_drawdown_pct, max_position_size, max_open_positions, mode, is_paused, telegram_bot_token, telegram_chat_id, trade_alerts_enabled, daily_summary_enabled, updated_at, symbols, fee_rate, slippage_rate FROM bot_config WHERE id = 1') as cursor:
+        async with db.execute('SELECT * FROM bot_config WHERE id = 1') as cursor:
             row = await cursor.fetchone()
             if row:
-                return {
-                    "daily_loss_limit": row[0],
-                    "max_drawdown_pct": row[1],
-                    "max_position_size": row[2],
-                    "max_open_positions": row[3],
-                    "mode": row[4],
-                    "is_paused": bool(row[5]),
-                    "telegram_bot_token": row[6],
-                    "telegram_chat_id": row[7],
-                    "trade_alerts_enabled": bool(row[8]),
-                    "daily_summary_enabled": bool(row[9]),
-                    "updated_at": row[10],
-                    "symbols": row[11].split(",") if len(row) > 11 and row[11] else ["BTC/USDT", "ETH/USDT", "BNB/USDT", "SOL/USDT", "XRP/USDT"],
-                    "fee_rate": row[12] if len(row) > 12 else 0.001,
-                    "slippage_rate": row[13] if len(row) > 13 else 0.0005
-                }
+                cols = [description[0] for description in cursor.description]
+                config = dict(zip(cols, row))
+                # Cast booleans
+                config["is_paused"] = bool(config.get("is_paused", 0))
+                config["trade_alerts_enabled"] = bool(config.get("trade_alerts_enabled", 1))
+                config["daily_summary_enabled"] = bool(config.get("daily_summary_enabled", 0))
+                config["auto_tune_enabled"] = bool(config.get("auto_tune_enabled", 0))
+                # Split symbols
+                sym = config.get("symbols", "")
+                config["symbols"] = sym.split(",") if sym else ["BTC/USDT", "ETH/USDT", "BNB/USDT", "SOL/USDT", "XRP/USDT"]
+                return config
             return {}
 
 async def update_bot_config(config: dict) -> bool:
     async with get_db_conn() as db:
         set_clauses = []
         values = []
-        allowed_keys = ['daily_loss_limit', 'max_drawdown_pct', 'max_position_size', 'max_open_positions', 'mode', 'is_paused', 'telegram_bot_token', 'telegram_chat_id', 'trade_alerts_enabled', 'daily_summary_enabled', 'symbols', 'fee_rate', 'slippage_rate']
+        allowed_keys = [
+            'daily_loss_limit', 'max_drawdown_pct', 'max_position_size', 'max_open_positions', 'mode', 
+            'is_paused', 'telegram_bot_token', 'telegram_chat_id', 'trade_alerts_enabled', 'daily_summary_enabled', 
+            'symbols', 'fee_rate', 'slippage_rate',
+            'base_order', 'volume_multiplier', 'max_dca_layers', 'per_trade_stop_pct',
+            'rsi_entry_gate', 'grid_tight', 'grid_wide', 'tp_tranche_1_pct', 'tp_tranche_2_pct',
+            'auto_tune_enabled'
+        ]
         for k, v in config.items():
             if k in allowed_keys:
                 if k == 'mode' and v not in ('paper', 'live'):

@@ -3,6 +3,7 @@
 import { useAlertsStore } from "@/store/alertsStore";
 import { Plus, Trash2, BellRing, TrendingUp, TrendingDown } from "lucide-react";
 import { useState } from "react";
+import GlassCard from "@/components/ui/GlassCard";
 
 export default function AlertsPanel() {
   const { alerts, addAlert, removeAlert } = useAlertsStore();
@@ -29,7 +30,7 @@ export default function AlertsPanel() {
     <div className="grid grid-cols-1 lg:grid-cols-3 gap-6">
       
       {/* Create Alert Form */}
-      <div className="liquid-glass-card p-6 h-fit lg:col-span-1 border border-blue-500/10">
+      <GlassCard className="p-6 h-fit lg:col-span-1 border border-blue-500/10">
         <h3 className="text-lg font-semibold mb-6 flex items-center gap-2">
           <Plus className="w-5 h-5 text-blue-500" />
           Create Alert
@@ -91,10 +92,10 @@ export default function AlertsPanel() {
             Add Alert
           </button>
         </form>
-      </div>
+      </GlassCard>
 
       {/* Active Alerts List */}
-      <div className="liquid-glass-card p-6 lg:col-span-2">
+      <GlassCard className="p-6 lg:col-span-2">
         <h3 className="text-lg font-semibold mb-6 flex items-center gap-2">
           <BellRing className="w-5 h-5 text-neutral-500" />
           Active Alerts
@@ -112,13 +113,13 @@ export default function AlertsPanel() {
                 key={alert.id} 
                 className={`p-4 rounded-xl border flex items-center justify-between transition-all ${
                   alert.triggered 
-                    ? 'bg-neutral-100 dark:bg-white/5 border-transparent opacity-60' 
-                    : 'bg-white dark:bg-[#151518] border-black/5 dark:border-white/5 shadow-sm'
+                    ? 'bg-black/10 dark:bg-white/10 border-transparent opacity-60' 
+                    : 'bg-white/30 dark:bg-black/40 border-black/5 dark:border-white/5 shadow-sm'
                 }`}
               >
                 <div className="flex items-center gap-4">
                   <div className={`w-10 h-10 rounded-full flex items-center justify-center ${
-                    alert.triggered ? 'bg-neutral-200 dark:bg-neutral-800' : 'bg-blue-500/10'
+                    alert.triggered ? 'bg-black/10 dark:bg-white/10' : 'bg-blue-500/10'
                   }`}>
                     {alert.condition === 'above' ? (
                       <TrendingUp className={`w-5 h-5 ${alert.triggered ? 'text-neutral-400' : 'text-green-500'}`} />
@@ -138,7 +139,7 @@ export default function AlertsPanel() {
                 
                 <div className="flex items-center gap-4">
                   {alert.triggered && (
-                    <span className="text-xs font-bold uppercase tracking-wider text-neutral-400 bg-neutral-200 dark:bg-neutral-800 px-2 py-1 rounded-md">
+                    <span className="text-xs font-bold uppercase tracking-wider text-neutral-400 bg-black/10 dark:bg-white/10 px-2 py-1 rounded-md">
                       Triggered
                     </span>
                   )}
@@ -153,7 +154,7 @@ export default function AlertsPanel() {
             ))}
           </div>
         )}
-      </div>
+      </GlassCard>
     </div>
   );
 }

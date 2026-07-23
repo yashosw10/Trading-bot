@@ -4,6 +4,7 @@ import { useQuery } from "@tanstack/react-query";
 import { api } from "@/lib/api";
 import { QUERY_KEYS } from "@/lib/queryKeys";
 import { Briefcase, ArrowUpRight } from "lucide-react";
+import GlassCard from "@/components/ui/GlassCard";
 import { motion } from "framer-motion";
 import { useLivePrice } from "@/hooks/useLivePrice";
 
@@ -64,7 +65,7 @@ export default function ActivePositions() {
   const hasPositions = activeSymbols.length > 0;
 
   return (
-    <div className="liquid-glass-card overflow-hidden">
+    <GlassCard className="overflow-hidden" isUpdating={isLoading}>
       <div className="p-6 border-b border-black/5 dark:border-white/5 flex items-center justify-between">
         <h3 className="text-lg font-semibold flex items-center gap-2">
           <Briefcase className="w-5 h-5 text-neutral-500" />
@@ -110,6 +111,6 @@ export default function ActivePositions() {
           </div>
         )}
       </div>
-    </div>
+    </GlassCard>
   );
 }

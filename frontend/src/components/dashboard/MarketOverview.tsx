@@ -5,6 +5,7 @@ import { useQuery } from "@tanstack/react-query";
 import { api } from "@/lib/api";
 import { TrendingUp, TrendingDown, Activity } from "lucide-react";
 import { LineChart, Line, ResponsiveContainer, YAxis } from "recharts";
+import GlassCard from "@/components/ui/GlassCard";
 
 interface CoinRowProps {
   symbol: string;
@@ -34,7 +35,7 @@ function CoinRow({ symbol, isActive, onClick }: CoinRowProps) {
     >
       <div className="flex items-center gap-3">
         <div className={`w-8 h-8 rounded-full flex items-center justify-center font-bold text-xs ${
-          isActive ? 'bg-blue-500 text-white' : 'bg-neutral-200 dark:bg-neutral-800 text-neutral-500'
+          isActive ? 'bg-blue-500 text-white' : 'bg-black/10 dark:bg-white/10 text-neutral-500'
         }`}>
           {symbol.split('/')[0].substring(0, 3)}
         </div>
@@ -89,7 +90,7 @@ export default function MarketOverview({ activeCoin, onSelect }: { activeCoin: s
   const coins = config?.symbols || [];
 
   return (
-    <div className="liquid-glass-card overflow-hidden">
+    <GlassCard className="overflow-hidden">
       <div className="p-4 border-b border-black/5 dark:border-white/5 flex items-center justify-between">
         <h3 className="text-sm font-semibold flex items-center gap-2">
           <Activity className="w-4 h-4 text-blue-500" />
@@ -106,6 +107,6 @@ export default function MarketOverview({ activeCoin, onSelect }: { activeCoin: s
           />
         ))}
       </div>
-    </div>
+    </GlassCard>
   );
 }

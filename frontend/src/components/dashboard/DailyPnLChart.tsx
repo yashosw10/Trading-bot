@@ -51,7 +51,7 @@ export default function DailyPnLChart() {
       const pnl = payload[0].value;
       const isPositive = pnl >= 0;
       return (
-        <div className="bg-white/90 dark:bg-neutral-900/90 backdrop-blur-md border border-neutral-200 dark:border-neutral-800 p-3 rounded-xl shadow-xl">
+        <div className="bg-white/40 dark:bg-black/60 backdrop-blur-md border border-white/20 dark:border-white/10 p-3 rounded-xl shadow-[0_4px_20px_rgba(0,0,0,0.1)]">
           <p className="text-neutral-500 text-sm mb-1">{label}</p>
           <p className={`font-bold text-lg ${isPositive ? 'text-green-500' : 'text-red-500'}`}>
             {isPositive ? '+' : ''}${pnl.toFixed(2)}

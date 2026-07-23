@@ -6,6 +6,7 @@ import { useTheme } from "next-themes";
 import { useState, useEffect } from "react";
 import { motion } from "framer-motion";
 import RiskLimitsPanel from "@/components/settings/RiskLimitsPanel";
+import StrategyTuningPanel from "@/components/settings/StrategyTuningPanel";
 import NotificationSettingsPanel from "@/components/settings/NotificationSettingsPanel";
 import TradingPairsPanel from "@/components/settings/TradingPairsPanel";
 
@@ -67,6 +68,7 @@ export default function SettingsPage() {
           </div>
 
           <RiskLimitsPanel />
+          <StrategyTuningPanel />
 
           <div className="liquid-glass-card p-6">
             <h3 className="text-lg font-semibold mb-6 flex items-center gap-2">

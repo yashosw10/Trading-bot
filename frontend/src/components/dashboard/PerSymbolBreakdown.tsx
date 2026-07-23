@@ -82,7 +82,7 @@ export default function PerSymbolBreakdown() {
                 if (active && payload && payload.length) {
                   const val = payload[0].value as number;
                   return (
-                    <div className="bg-white dark:bg-[#151518] border border-black/10 dark:border-white/10 p-3 rounded-xl shadow-xl">
+                    <div className="bg-white/40 dark:bg-black/60 border border-white/20 dark:border-white/10 p-3 rounded-xl shadow-[0_4px_20px_rgba(0,0,0,0.1)] backdrop-blur-md">
                       <p className="font-bold text-sm text-neutral-900 dark:text-white">{payload[0].payload.symbol}</p>
                       <p className={`text-sm font-bold ${val >= 0 ? 'text-green-500' : 'text-red-500'}`}>
                         {val >= 0 ? '+' : ''}${val.toFixed(2)}

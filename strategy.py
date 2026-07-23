@@ -5,6 +5,7 @@ from datetime import datetime, timezone
 from loguru import logger
 from models import TickerData, TradeSignal
 import database
+import httpx
 
 # ─────────────────────────────────────────────
 #  Configuration constants  (tweak here only)
@@ -211,6 +212,8 @@ class StrategyEngine:
         self.starting_balance = 0.0
         self.peak_equity      = 0.0
         self.start_ts         = 0.0
+        
+        self.macro_regimes: dict[str, str] = {}
 
     # ══════════════════════════════════════════
     #  Internal helpers
@@ -222,24 +225,36 @@ class StrategyEngine:
         await database.upsert_strategy_state(symbol, json.dumps(state.to_dict()))
 
     def _active_positions(self) -> int:
-        return sum(1 for s in self.states.values() if s.dca_layer > 0)
+        return sum(1 for s in self.states.values() if s.position_amount > 0.000001)
 
-    def _grid_spacing(self, symbol: str) -> float:
+    def _grid_spacing(self, symbol: str, config: dict) -> float:
         """
         Volatility-adjusted grid spacing from 1-min Bollinger Band width.
         TP target also scales: max(base_grid, 0.5 × bb_width) so we don't
         exit too early during high-volatility regimes.
         """
+        grid_tight = float(config.get("grid_tight", GRID_TIGHT * 100)) / 100.0
+        grid_wide = float(config.get("grid_wide", GRID_WIDE * 100)) / 100.0
+        
+        if config.get("auto_tune_enabled"):
+            regime = self.macro_regimes.get(symbol, "bull")
+            if regime == "bear":
+                grid_tight *= 0.8
+                grid_wide *= 0.8
+            else:
+                grid_tight *= 1.2
+                grid_wide *= 1.2
+        
         candles = list(self.states[symbol].candles)
         if len(candles) < BB_PERIOD:
-            return GRID_TIGHT
+            return grid_tight
         recent = candles[-BB_PERIOD:]
         sma = sum(recent) / BB_PERIOD
         if sma == 0:
-            return GRID_TIGHT
+            return grid_tight
         variance = sum((p - sma) ** 2 for p in recent) / BB_PERIOD
         bb_width = (4 * math.sqrt(variance)) / sma
-        base_grid = GRID_WIDE if bb_width > BB_VOLATILITY_THRESH else GRID_TIGHT
+        base_grid = grid_wide if bb_width > BB_VOLATILITY_THRESH else grid_tight
         return max(base_grid, 0.5 * bb_width)
 
     def _indicators(self, symbol: str) -> tuple[float, float]:
@@ -247,7 +262,7 @@ class StrategyEngine:
         candles = list(self.states[symbol].candles)
         return _calc_ema(candles, EMA_PERIOD), _calc_rsi(candles, RSI_PERIOD)
 
-    def _passes_entry_gate(self, symbol: str) -> bool:
+    def _passes_entry_gate(self, symbol: str, config: dict) -> bool:
         """
         Base-order gate:
           • Price must be above the 50-EMA  (confirmed uptrend)
@@ -256,22 +271,41 @@ class StrategyEngine:
         st = self.states[symbol]
         price = st.raw_prices[-1] if st.raw_prices else 0.0
         ema, rsi = self._indicators(symbol)
+        
+        rsi_entry_gate = float(config.get("rsi_entry_gate", RSI_ENTRY_GATE))
+        if config.get("auto_tune_enabled"):
+            regime = self.macro_regimes.get(symbol, "bull")
+            rsi_entry_gate = 30.0 if regime == "bear" else 55.0
+        
         if price <= ema:
             logger.debug(f"{symbol}: trend FAIL  price={price:.4f} EMA={ema:.4f}")
             return False
-        if rsi >= RSI_ENTRY_GATE:
+        if rsi >= rsi_entry_gate:
             logger.debug(f"{symbol}: RSI FAIL  RSI={rsi:.1f}")
             return False
         return True
 
-    def _passes_dca_gate(self, symbol: str) -> bool:
+    def _passes_dca_gate(self, symbol: str, config: dict) -> bool:
         """
         DCA layer gate:
           • Only add when RSI < 40 (deep oversold) OR RSI > 60 (strong momentum)
           • Skip the 40–60 neutral zone — let the position age instead.
         """
         _, rsi = self._indicators(symbol)
-        passes = rsi < RSI_DCA_SKIP_LOW or rsi > RSI_DCA_SKIP_HIGH
+        
+        dca_skip_low = RSI_DCA_SKIP_LOW
+        dca_skip_high = RSI_DCA_SKIP_HIGH
+        
+        if config.get("auto_tune_enabled"):
+            regime = self.macro_regimes.get(symbol, "bull")
+            if regime == "bear":
+                dca_skip_low = 30
+                dca_skip_high = 70
+            else:
+                dca_skip_low = 45
+                dca_skip_high = 55
+
+        passes = rsi < dca_skip_low or rsi > dca_skip_high
         if not passes:
             logger.debug(f"{symbol}: DCA RSI gate FAIL  RSI={rsi:.1f} (neutral zone)")
         return passes
@@ -333,7 +367,9 @@ class StrategyEngine:
             if st.dca_layer == 0:
                 st.price_high = price
                 st.price_low = price
-                st.entry_grid = self._grid_spacing(symbol)
+                # We expect _grid_spacing to be set before calling on_order_completed,
+                # so we don't recalculate it here to avoid needing config.
+                # It is already locked in via st.entry_grid = grid in the main loop.
             else:
                 st.price_high = max(st.price_high, price)
                 st.price_low = min(st.price_low, price)
@@ -414,7 +450,6 @@ class StrategyEngine:
     # ══════════════════════════════════════════
     #  Main event loop
     # ══════════════════════════════════════════
-
     async def _sync_starting_balance(self, active_mode: str):
         """Fetches the current wallet balance to establish the daily baseline."""
         self.starting_balance = await database.get_balance(self.fiat_currency, mode=active_mode)
@@ -434,6 +469,31 @@ class StrategyEngine:
                                 self.starting_balance = b_amt
             except Exception as e:
                 logger.error(f"Failed to fetch live starting balance: {e}")
+
+    async def _update_macro_regimes(self, symbols: list[str]):
+        """Fetch 1D candles and determine Bull/Bear regime for each symbol using 70D SMA (10 weeks)."""
+        async with httpx.AsyncClient() as client:
+            for symbol in symbols:
+                try:
+                    market = f"B-{symbol.replace('/', '_')}"
+                    res = await client.get(
+                        "https://public.coindcx.com/market_data/candles",
+                        params={"pair": market, "interval": "1d", "limit": 70},
+                        timeout=5.0
+                    )
+                    if res.status_code == 200:
+                        data = res.json()
+                        if len(data) >= 70:
+                            closes = [float(candle["close"]) for candle in data[:70]]
+                            sma_70d = sum(closes) / 70.0
+                            current_price = closes[0]
+                            regime = "bull" if current_price > sma_70d else "bear"
+                            self.macro_regimes[symbol] = regime
+                            logger.info(f"{symbol} Macro Regime updated to: {regime.upper()} (Price: {current_price:.2f}, 70D SMA: {sma_70d:.2f})")
+                        else:
+                            self.macro_regimes[symbol] = "bull"
+                except Exception as e:
+                    logger.error(f"Error fetching macro regime for {symbol}: {e}")
 
     async def start(self, shutdown_event: asyncio.Event):
         logger.info("Starting Volatility-Adjusted DCA Hybrid Engine (v3 — merged)...")
@@ -468,6 +528,19 @@ class StrategyEngine:
             except Exception as e:
                 logger.error(f"Failed to hydrate state for {sym}: {e}")
 
+        async def _macro_loop():
+            while not shutdown_event.is_set():
+                try:
+                    config = await database.get_bot_config()
+                    if config.get("auto_tune_enabled"):
+                        symbols = config.get("symbols", [])
+                        await self._update_macro_regimes(symbols)
+                except Exception as e:
+                    logger.error(f"Macro loop error: {e}")
+                await asyncio.sleep(3600)  # Every hour
+
+        asyncio.create_task(_macro_loop())
+
         while not shutdown_event.is_set():
             try:
                 now_utc = datetime.now(timezone.utc)
@@ -488,6 +561,7 @@ class StrategyEngine:
                 volume_multiplier = float(config.get("volume_multiplier", VOLUME_MULTIPLIER))
                 per_trade_stop_pct = float(config.get("per_trade_stop_pct", PER_TRADE_STOP_PCT * 100)) / 100.0
                 max_dca_layers = int(config.get("max_dca_layers", MAX_DCA_LAYERS))
+                max_position_size = float(config.get("max_position_size", 500.0))
                 
                 ticker: TickerData = await asyncio.wait_for(
                     self.data_queue.get(), timeout=1.0
@@ -516,6 +590,10 @@ class StrategyEngine:
                     st.position_amount = 0.0
                     st.avg_entry = 0.0
                     st.total_invested = 0.0
+
+                # ── Fix for dangling dca_layer from manual sells ──────
+                if st.position_amount <= 0.000001 and st.dca_layer > 0:
+                    self._reset_position(symbol, cooldown=False)
 
                 # ── Feed raw tick ─────────────────────────────────────
                 st.raw_prices.append(price)
@@ -642,7 +720,7 @@ class StrategyEngine:
                     self.data_queue.task_done()
                     continue
 
-                grid = self._grid_spacing(symbol)
+                grid = self._grid_spacing(symbol, config)
 
                 # ════════════════════════════════════════════════════
                 #  EXECUTION — Base order
@@ -652,15 +730,19 @@ class StrategyEngine:
                     if is_paused:
                         self.data_queue.task_done()
                         continue
-                    if self._active_positions() >= MAX_CONCURRENT_POS:
+                    
+                    max_open_positions = int(config.get("max_open_positions", MAX_CONCURRENT_POS))
+                    if self._active_positions() >= max_open_positions:
                         self.data_queue.task_done()
                         continue
-                    if not self._passes_entry_gate(symbol):
+                    if not self._passes_entry_gate(symbol, config):
                         self.data_queue.task_done()
                         continue
 
-                    await self._place_buy(symbol, base_order, price, ticker, "Base Order")
-                    st.entry_grid = grid   # lock grid at entry for all TP maths
+                    amount_fiat = min(base_order, max_position_size)
+                    if amount_fiat > 0:
+                        st.entry_grid = grid   # lock grid at entry for all TP maths
+                        await self._place_buy(symbol, amount_fiat, price, ticker, "Base Order")
 
                 # ════════════════════════════════════════════════════
                 #  EXECUTION — DCA layers  (hard-capped at MAX_DCA_LAYERS)
@@ -670,10 +752,16 @@ class StrategyEngine:
                       price < st.last_buy_price * (1 - grid)):
                     if st.dca_layer >= max_dca_layers:
                         logger.warning(f"{symbol}: DCA cap ({max_dca_layers}) reached — holding.")
-                    elif self._passes_dca_gate(symbol):
+                    elif self._passes_dca_gate(symbol, config):
                         n = st.dca_layer
                         amount_fiat = base_order * (volume_multiplier ** n)
-                        await self._place_buy(symbol, amount_fiat, price, ticker, f"DCA Layer {n + 1}")
+                        remaining_capacity = max_position_size - st.total_invested
+                        
+                        if remaining_capacity <= 0:
+                            logger.warning(f"{symbol}: Max position size ({max_position_size}) reached — holding.")
+                        else:
+                            amount_fiat = min(amount_fiat, remaining_capacity)
+                            await self._place_buy(symbol, amount_fiat, price, ticker, f"DCA Layer {n + 1}")
 
                 # ════════════════════════════════════════════════════
                 #  EXECUTION — Take-profit tranches
@@ -703,20 +791,21 @@ class StrategyEngine:
                         else:
                             target_multiplier = 1 + g
 
-                        # FIX: the sell + state updates were previously
-                        # dedented out of this `if`, causing an
-                        # UnboundLocalError on `sell_amt` every tick the
-                        # price target was NOT met, silently swallowed by
-                        # the outer try/except in the main loop.
                         if price >= st.avg_entry * target_multiplier:
-                            sell_amt = st.position_amount * TP_TRANCHE_1_PCT
-                            await self._place_sell(symbol, sell_amt, price, ticker, "TP1 — 40%")
+                            tp_1_pct = float(config.get("tp_tranche_1_pct", TP_TRANCHE_1_PCT * 100)) / 100.0
+                            if config.get("auto_tune_enabled"):
+                                tp_1_pct = min(1.0, tp_1_pct * (1.5 if self.macro_regimes.get(symbol, "bull") == "bear" else 0.5))
+                            sell_amt = st.position_amount * tp_1_pct
+                            await self._place_sell(symbol, sell_amt, price, ticker, "TP1")
                             st.tp1_done   = True
                             st.trail_high = price
 
                     elif st.tp1_done and not st.tp2_done and price >= st.avg_entry * (1 + 2 * g):
-                        sell_amt = st.position_amount * TP_TRANCHE_2_PCT
-                        await self._place_sell(symbol, sell_amt, price, ticker, "TP2 — 35%")
+                        tp_2_pct = float(config.get("tp_tranche_2_pct", TP_TRANCHE_2_PCT * 100)) / 100.0
+                        if config.get("auto_tune_enabled"):
+                            tp_2_pct = min(1.0, tp_2_pct * (1.5 if self.macro_regimes.get(symbol, "bull") == "bear" else 0.5))
+                        sell_amt = st.position_amount * tp_2_pct
+                        await self._place_sell(symbol, sell_amt, price, ticker, "TP2")
                         st.tp2_done   = True
                         st.trail_high = max(st.trail_high, price)
 

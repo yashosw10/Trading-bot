@@ -7,8 +7,13 @@ import { ComposedChart, Line, Bar, XAxis, YAxis, Tooltip, ResponsiveContainer, C
 import { BarChart2, TrendingUp, AlertTriangle, ExternalLink } from "lucide-react";
 import CustomSelect from "../ui/CustomSelect";
 import { useMemo, useState } from "react";
+import { useTheme } from "next-themes";
+import GlassCard from "@/components/ui/GlassCard";
 
 export default function OhlcvChart({ activeCoin = "BTC/USDT" }: { activeCoin?: string }) {
+  const { theme } = useTheme();
+  const lineColor = theme === 'dark' ? '#a855f7' : '#111111';
+  const volumeColor = theme === 'dark' ? '#6b7280' : '#9ca3af';
   const [timeRange, setTimeRange] = useState("1 Hour");
   const [indicatorType, setIndicatorType] = useState("NONE");
   
@@ -76,7 +81,7 @@ export default function OhlcvChart({ activeCoin = "BTC/USDT" }: { activeCoin?: s
   const indicators = ['NONE', 'SMA', 'EMA', 'BOLLINGER', 'RSI', 'MACD'];
 
   return (
-    <div className="liquid-glass-card overflow-hidden">
+    <GlassCard className="overflow-hidden" isUpdating={isLoading}>
       <div className="p-6 border-b border-black/5 dark:border-white/5 flex flex-col md:flex-row items-start md:items-center justify-between gap-4">
         <h3 className="text-lg font-semibold flex items-center gap-2">
           <BarChart2 className="w-5 h-5 text-neutral-500" />
@@ -99,7 +104,7 @@ export default function OhlcvChart({ activeCoin = "BTC/USDT" }: { activeCoin?: s
                 onClick={() => setTimeRange(tr)}
                 className={`px-3 py-1 text-sm font-medium rounded-lg transition-colors whitespace-nowrap ${
                   timeRange === tr 
-                    ? 'bg-white dark:bg-[#1c1c1e] text-neutral-900 dark:text-white shadow-sm' 
+                    ? 'bg-white/50 dark:bg-black/50 text-neutral-900 dark:text-white shadow-sm' 
                     : 'text-neutral-500 hover:text-neutral-700 dark:hover:text-neutral-300'
                 }`}
               >
@@ -175,13 +180,13 @@ export default function OhlcvChart({ activeCoin = "BTC/USDT" }: { activeCoin?: s
                   return [value, name];
                 }}
               />
-              <Bar yAxisId="volume" dataKey="volume" fill="#3b82f6" opacity={0.3} radius={[4,4,0,0]} />
+              <Bar yAxisId="volume" dataKey="volume" fill={volumeColor} opacity={0.3} radius={[4,4,0,0]} />
               
               <Line 
                 yAxisId="price"
                 type="monotone" 
                 dataKey="close" 
-                stroke="#3b82f6" 
+                stroke={lineColor} 
                 strokeWidth={2}
                 dot={false}
               />
@@ -249,6 +254,6 @@ export default function OhlcvChart({ activeCoin = "BTC/USDT" }: { activeCoin?: s
           </ResponsiveContainer>
         )}
       </div>
-    </div>
+    </GlassCard>
   );
 }

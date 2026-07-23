@@ -124,7 +124,7 @@ function StatCard({ title, value, icon, colorClass = "text-neutral-900 dark:text
         <div className={`text-2xl font-black font-mono ${colorClass}`}>
           {value}
         </div>
-        <div className="p-2 bg-white dark:bg-[#1a1a1f] rounded-xl shadow-sm">
+        <div className="p-2 bg-white/30 dark:bg-black/40 rounded-xl shadow-sm">
           {icon}
         </div>
       </div>

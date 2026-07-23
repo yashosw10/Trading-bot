@@ -59,7 +59,7 @@ export default function FundManagement({ defaultCurrency }: { defaultCurrency: C
             step={100}
             value={amount}
             onChange={(e) => setAmount(Number(e.target.value))}
-            className="w-full bg-black/5 dark:bg-white/5 border border-black/10 dark:border-white/10 rounded-xl px-4 py-2 outline-none focus:ring-2 focus:ring-blue-500/50 backdrop-blur-md transition-all text-neutral-900 dark:text-white"
+            className="w-full bg-white/40 dark:bg-black/70 border border-white/20 dark:border-[rgba(100,255,255,0.2)] rounded-xl px-4 py-2 outline-none focus:ring-2 focus:ring-blue-500/50 backdrop-blur-md transition-all text-neutral-900 dark:text-white"
           />
         </div>
 
@@ -79,7 +79,7 @@ export default function FundManagement({ defaultCurrency }: { defaultCurrency: C
         <button
           type="submit"
           disabled={mutation.isPending}
-          className="w-full liquid-glass-button bg-blue-500/10 hover:bg-blue-500/20 text-blue-600 dark:text-blue-400 py-3 font-semibold flex items-center justify-center gap-2 group"
+          className="w-full bg-[#224488] hover:bg-blue-800 text-white shadow-[0_0_10px_rgba(34,68,136,0.5)] dark:shadow-[0_0_15px_rgba(34,68,136,0.8)] rounded-xl py-3 font-semibold flex items-center justify-center gap-2 group transition-all"
         >
           {mutation.isPending ? "Processing..." : "Add Funds"}
           {!mutation.isPending && <ArrowRight className="w-4 h-4 group-hover:translate-x-1 transition-transform" />}
