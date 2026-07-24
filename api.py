@@ -385,6 +385,13 @@ async def get_ohlcv(symbol: str = "BTC/USDT", interval: str = "1h", limit: int =
         
     return []
 
+@app.get("/api/macro-regimes")
+async def api_get_macro_regimes(request: Request):
+    strategy = getattr(request.app.state, "strategy_engine", None)
+    if not strategy:
+        return {}
+    return strategy.macro_regimes
+
 @app.get("/api/config")
 async def api_get_config(request: Request):
     config = await database.get_bot_config()

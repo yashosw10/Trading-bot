@@ -9,6 +9,7 @@ import DrawdownChart from "@/components/dashboard/DrawdownChart";
 import BacktestViewer from "@/components/dashboard/BacktestViewer";
 import PerSymbolBreakdown from "@/components/dashboard/PerSymbolBreakdown";
 import DailyPnLChart from "@/components/dashboard/DailyPnLChart";
+import MacroRegimesPanel from "@/components/dashboard/MacroRegimesPanel";
 
 export default function PerformancePage() {
   return (
@@ -27,6 +28,7 @@ export default function PerformancePage() {
 
       <div className="space-y-6">
         <AnalyticsCards />
+        <MacroRegimesPanel />
         <div className="grid grid-cols-1 lg:grid-cols-2 gap-6">
           <EquityCurve />
           <DrawdownChart />

@@ -213,7 +213,7 @@ class StrategyEngine:
         self.peak_equity      = 0.0
         self.start_ts         = 0.0
         
-        self.macro_regimes: dict[str, str] = {}
+        self.macro_regimes: dict[str, dict] = {}
 
     # ══════════════════════════════════════════
     #  Internal helpers
@@ -237,7 +237,7 @@ class StrategyEngine:
         grid_wide = float(config.get("grid_wide", GRID_WIDE * 100)) / 100.0
         
         if config.get("auto_tune_enabled"):
-            regime = self.macro_regimes.get(symbol, "bull")
+            regime = self.macro_regimes.get(symbol, {}).get("regime", "bull")
             if regime == "bear":
                 grid_tight *= 0.8
                 grid_wide *= 0.8
@@ -274,7 +274,7 @@ class StrategyEngine:
         
         rsi_entry_gate = float(config.get("rsi_entry_gate", RSI_ENTRY_GATE))
         if config.get("auto_tune_enabled"):
-            regime = self.macro_regimes.get(symbol, "bull")
+            regime = self.macro_regimes.get(symbol, {}).get("regime", "bull")
             rsi_entry_gate = 30.0 if regime == "bear" else 55.0
         
         if price <= ema:
@@ -297,7 +297,7 @@ class StrategyEngine:
         dca_skip_high = RSI_DCA_SKIP_HIGH
         
         if config.get("auto_tune_enabled"):
-            regime = self.macro_regimes.get(symbol, "bull")
+            regime = self.macro_regimes.get(symbol, {}).get("regime", "bull")
             if regime == "bear":
                 dca_skip_low = 30
                 dca_skip_high = 70
@@ -488,10 +488,20 @@ class StrategyEngine:
                             sma_70d = sum(closes) / 70.0
                             current_price = closes[0]
                             regime = "bull" if current_price > sma_70d else "bear"
-                            self.macro_regimes[symbol] = regime
+                            self.macro_regimes[symbol] = {
+                                "regime": regime,
+                                "price": current_price,
+                                "sma_70d": sma_70d,
+                                "updated_at": datetime.now(timezone.utc).isoformat()
+                            }
                             logger.info(f"{symbol} Macro Regime updated to: {regime.upper()} (Price: {current_price:.2f}, 70D SMA: {sma_70d:.2f})")
                         else:
-                            self.macro_regimes[symbol] = "bull"
+                            self.macro_regimes[symbol] = {
+                                "regime": "bull",
+                                "price": 0.0,
+                                "sma_70d": 0.0,
+                                "updated_at": datetime.now(timezone.utc).isoformat()
+                            }
                 except Exception as e:
                     logger.error(f"Error fetching macro regime for {symbol}: {e}")
 
@@ -794,7 +804,7 @@ class StrategyEngine:
                         if price >= st.avg_entry * target_multiplier:
                             tp_1_pct = float(config.get("tp_tranche_1_pct", TP_TRANCHE_1_PCT * 100)) / 100.0
                             if config.get("auto_tune_enabled"):
-                                tp_1_pct = min(1.0, tp_1_pct * (1.5 if self.macro_regimes.get(symbol, "bull") == "bear" else 0.5))
+                                tp_1_pct = min(1.0, tp_1_pct * (1.5 if self.macro_regimes.get(symbol, {}).get("regime", "bull") == "bear" else 0.5))
                             sell_amt = st.position_amount * tp_1_pct
                             await self._place_sell(symbol, sell_amt, price, ticker, "TP1")
                             st.tp1_done   = True
@@ -803,7 +813,7 @@ class StrategyEngine:
                     elif st.tp1_done and not st.tp2_done and price >= st.avg_entry * (1 + 2 * g):
                         tp_2_pct = float(config.get("tp_tranche_2_pct", TP_TRANCHE_2_PCT * 100)) / 100.0
                         if config.get("auto_tune_enabled"):
-                            tp_2_pct = min(1.0, tp_2_pct * (1.5 if self.macro_regimes.get(symbol, "bull") == "bear" else 0.5))
+                            tp_2_pct = min(1.0, tp_2_pct * (1.5 if self.macro_regimes.get(symbol, {}).get("regime", "bull") == "bear" else 0.5))
                         sell_amt = st.position_amount * tp_2_pct
                         await self._place_sell(symbol, sell_amt, price, ticker, "TP2")
                         st.tp2_done   = True
