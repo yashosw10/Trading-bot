@@ -799,7 +799,7 @@ class StrategyEngine:
                             decay_factor = min(1.0, (hours_stuck - 24.0) / 48.0)
                             target_multiplier = 1 + (g * (1 - decay_factor)) + (0.002 * decay_factor)
                         else:
-                            target_multiplier = 1 + g
+                            target_multiplier = 1 + max(0.015, g)
 
                         if price >= st.avg_entry * target_multiplier:
                             tp_1_pct = float(config.get("tp_tranche_1_pct", TP_TRANCHE_1_PCT * 100)) / 100.0
@@ -810,7 +810,7 @@ class StrategyEngine:
                             st.tp1_done   = True
                             st.trail_high = price
 
-                    elif st.tp1_done and not st.tp2_done and price >= st.avg_entry * (1 + 2 * g):
+                    elif st.tp1_done and not st.tp2_done and price >= st.avg_entry * (1 + 2 * max(0.015, g)):
                         tp_2_pct = float(config.get("tp_tranche_2_pct", TP_TRANCHE_2_PCT * 100)) / 100.0
                         if config.get("auto_tune_enabled"):
                             tp_2_pct = min(1.0, tp_2_pct * (1.5 if self.macro_regimes.get(symbol, {}).get("regime", "bull") == "bear" else 0.5))
