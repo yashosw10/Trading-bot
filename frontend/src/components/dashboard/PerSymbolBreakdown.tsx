@@ -54,9 +54,9 @@ export default function PerSymbolBreakdown() {
       <div className="mb-6 relative z-10">
         <h3 className="text-lg font-semibold flex items-center gap-2">
           <PieChartIcon className="w-5 h-5 text-indigo-500" />
-          Per-Symbol Breakdown
+          Per-Symbol PnL Breakdown
         </h3>
-        <p className="text-sm text-neutral-500">Realized PnL grouped by asset.</p>
+        <p className="text-sm text-neutral-500"></p>
       </div>
 
       <div className="h-64 relative z-10">

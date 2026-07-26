@@ -47,7 +47,7 @@ export default function ManualOrder() {
         </div>
         <div>
           <h2 className="text-xl font-bold tracking-tight text-neutral-900 dark:text-white">Manual Order</h2>
-          <p className="text-sm text-neutral-500">Bypass strategy and place a trade directly.</p>
+          <p className="text-sm text-neutral-500"></p>
         </div>
       </div>
 

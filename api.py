@@ -392,6 +392,19 @@ async def api_get_macro_regimes(request: Request):
         return {}
     return strategy.macro_regimes
 
+@app.post("/api/macro-regimes/refresh")
+async def api_post_macro_regimes_refresh(request: Request):
+    strategy = getattr(request.app.state, "strategy_engine", None)
+    if not strategy:
+        return {"status": "error", "message": "Strategy engine not loaded"}
+    
+    config = await database.get_bot_config()
+    symbols = _get_parsed_symbols(config, [])
+        
+    if symbols:
+        await strategy._update_macro_regimes(symbols)
+    return {"status": "success"}
+
 @app.get("/api/config")
 async def api_get_config(request: Request):
     config = await database.get_bot_config()

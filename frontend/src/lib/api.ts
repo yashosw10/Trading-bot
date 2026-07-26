@@ -58,5 +58,6 @@ export const api = {
     method: 'POST'
   }),
   getOhlcv: (symbol: string, interval: string = '1h', limit: number = 24) => fetcher<any>(`${API_BASE_URL}/ohlcv?symbol=${encodeURIComponent(symbol)}&interval=${interval}&limit=${limit}`),
-  getMacroRegimes: () => fetcher<any>(`${API_BASE_URL}/macro-regimes`)
+  getMacroRegimes: () => fetcher<any>(`${API_BASE_URL}/macro-regimes`),
+  refreshMacroRegimes: () => fetcher<{status: string}>(`${API_BASE_URL}/macro-regimes/refresh`, { method: 'POST' })
 };

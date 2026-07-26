@@ -33,7 +33,7 @@ export default function SettingsPage() {
           Settings
         </h1>
         <p className="text-neutral-500 dark:text-neutral-400 mt-1">
-          Manage your account preferences and application settings.
+          
         </p>
       </div>
 
