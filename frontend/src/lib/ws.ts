@@ -46,15 +46,22 @@ class WebSocketManager {
       }
       const ticket = await this.ticketPromise;
       
-      this.ws = new WebSocket(`${WS_URL}?ticket=${ticket}`);
+      const currentWs = new WebSocket(`${WS_URL}?ticket=${ticket}`);
+      this.ws = currentWs;
       
-      this.ws.onopen = () => {
+      currentWs.onopen = () => {
+        if (this.ws !== currentWs) return;
         this.isConnecting = false;
         this.reconnectAttempts = 0;
-        this.initialMessages.forEach(msg => this.ws?.send(msg));
+        this.initialMessages.forEach(msg => {
+          if (currentWs.readyState === WebSocket.OPEN) {
+            currentWs.send(msg);
+          }
+        });
       };
 
-      this.ws.onmessage = (event) => {
+      currentWs.onmessage = (event) => {
+        if (this.ws !== currentWs) return;
         try {
           const data = JSON.parse(event.data);
           this.subscribers.forEach(cb => cb(data));
@@ -63,17 +70,19 @@ class WebSocketManager {
         }
       };
 
-      this.ws.onclose = () => {
-        this.ws = null;
-        this.isConnecting = false;
-        this.ticketPromise = null;
-        if (this.subscribers.size > 0 && this.reconnectAttempts < this.maxReconnectAttempts) {
-          this.reconnectAttempts++;
-          setTimeout(() => this.connect(), 1000 * Math.pow(2, this.reconnectAttempts));
+      currentWs.onclose = () => {
+        if (this.ws === currentWs) {
+          this.ws = null;
+          this.isConnecting = false;
+          this.ticketPromise = null;
+          if (this.subscribers.size > 0 && this.reconnectAttempts < this.maxReconnectAttempts) {
+            this.reconnectAttempts++;
+            setTimeout(() => this.connect(), 1000 * Math.pow(2, this.reconnectAttempts));
+          }
         }
       };
 
-      this.ws.onerror = (error) => {
+      currentWs.onerror = (error) => {
         console.error("WebSocket error:", error);
       };
       

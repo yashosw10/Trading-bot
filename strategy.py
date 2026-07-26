@@ -214,6 +214,7 @@ class StrategyEngine:
         self.start_ts         = 0.0
         
         self.macro_regimes: dict[str, dict] = {}
+        self.volume_profiles: dict[str, dict] = {}
 
     # ══════════════════════════════════════════
     #  Internal helpers
@@ -242,6 +243,12 @@ class StrategyEngine:
                 grid_tight *= 0.8
                 grid_wide *= 0.8
             else:
+                grid_tight *= 1.2
+                grid_wide *= 1.2
+                
+            vol_profile = self.volume_profiles.get(symbol, {})
+            surge = vol_profile.get("surge", True)
+            if not surge:
                 grid_tight *= 1.2
                 grid_wide *= 1.2
         
@@ -276,6 +283,11 @@ class StrategyEngine:
         if config.get("auto_tune_enabled"):
             regime = self.macro_regimes.get(symbol, {}).get("regime", "bull")
             rsi_entry_gate = 30.0 if regime == "bear" else 55.0
+            
+            vol_profile = self.volume_profiles.get(symbol, {})
+            surge = vol_profile.get("surge", True)
+            if not surge:
+                rsi_entry_gate -= 10.0
         
         if price <= ema:
             logger.debug(f"{symbol}: trend FAIL  price={price:.4f} EMA={ema:.4f}")
@@ -304,6 +316,11 @@ class StrategyEngine:
             else:
                 dca_skip_low = 45
                 dca_skip_high = 55
+                
+            vol_profile = self.volume_profiles.get(symbol, {})
+            surge = vol_profile.get("surge", True)
+            if not surge:
+                dca_skip_low -= 10.0
 
         passes = rsi < dca_skip_low or rsi > dca_skip_high
         if not passes:
@@ -505,6 +522,39 @@ class StrategyEngine:
                 except Exception as e:
                     logger.error(f"Error fetching macro regime for {symbol}: {e}")
 
+    async def _update_volume_profiles(self, symbols: list[str]):
+        """Fetch 5m candles and detect volume capitulation surges."""
+        if isinstance(symbols, str):
+            symbols = [s.strip() for s in symbols.split(",") if s.strip()]
+            
+        async with httpx.AsyncClient() as client:
+            for symbol in symbols:
+                try:
+                    market = f"B-{symbol.replace('/', '_')}"
+                    res = await client.get(
+                        "https://public.coindcx.com/market_data/candles",
+                        params={"pair": market, "interval": "5m", "limit": 20},
+                        timeout=5.0
+                    )
+                    if res.status_code == 200:
+                        data = res.json()
+                        if len(data) >= 10:
+                            volumes = [float(candle.get("volume", 0)) for candle in data]
+                            avg_vol = sum(volumes[1:]) / (len(volumes) - 1)
+                            current_vol = volumes[0] + volumes[1]
+                            surge = current_vol > (avg_vol * 2 * 1.5)
+                            
+                            self.volume_profiles[symbol] = {
+                                "surge": surge,
+                                "avg_vol": avg_vol,
+                                "current_vol": current_vol,
+                                "updated_at": datetime.now(timezone.utc).isoformat()
+                            }
+                        else:
+                            self.volume_profiles[symbol] = {"surge": True, "avg_vol": 0, "current_vol": 0}
+                except Exception as e:
+                    logger.error(f"Error fetching volume profile for {symbol}: {e}")
+
     async def start(self, shutdown_event: asyncio.Event):
         logger.info("Starting Volatility-Adjusted DCA Hybrid Engine (v3 — merged)...")
 
@@ -548,8 +598,20 @@ class StrategyEngine:
                 except Exception as e:
                     logger.error(f"Macro loop error: {e}")
                 await asyncio.sleep(3600)  # Every hour
+                
+        async def _volume_loop():
+            while not shutdown_event.is_set():
+                try:
+                    config = await database.get_bot_config()
+                    if config.get("auto_tune_enabled"):
+                        symbols = config.get("symbols", [])
+                        await self._update_volume_profiles(symbols)
+                except Exception as e:
+                    logger.error(f"Volume loop error: {e}")
+                await asyncio.sleep(60)
 
         asyncio.create_task(_macro_loop())
+        asyncio.create_task(_volume_loop())
 
         while not shutdown_event.is_set():
             try:

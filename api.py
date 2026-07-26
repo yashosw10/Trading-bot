@@ -405,6 +405,13 @@ async def api_post_macro_regimes_refresh(request: Request):
         await strategy._update_macro_regimes(symbols)
     return {"status": "success"}
 
+@app.get("/api/volume-profiles")
+async def api_get_volume_profiles(request: Request):
+    strategy = getattr(request.app.state, "strategy_engine", None)
+    if not strategy:
+        return {}
+    return strategy.volume_profiles
+
 @app.get("/api/config")
 async def api_get_config(request: Request):
     config = await database.get_bot_config()
