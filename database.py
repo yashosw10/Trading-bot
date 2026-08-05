@@ -100,6 +100,7 @@ async def init_db():
                 tp_tranche_1_pct REAL DEFAULT 40.0,
                 tp_tranche_2_pct REAL DEFAULT 35.0,
                 auto_tune_enabled BOOLEAN DEFAULT 0,
+                llm_api_key TEXT DEFAULT '',
                 updated_at TEXT DEFAULT (datetime('now'))
             )
         '''
@@ -123,7 +124,8 @@ async def init_db():
             "ALTER TABLE bot_config ADD COLUMN grid_wide REAL DEFAULT 5.0",
             "ALTER TABLE bot_config ADD COLUMN tp_tranche_1_pct REAL DEFAULT 40.0",
             "ALTER TABLE bot_config ADD COLUMN tp_tranche_2_pct REAL DEFAULT 35.0",
-            "ALTER TABLE bot_config ADD COLUMN auto_tune_enabled BOOLEAN DEFAULT 0"
+            "ALTER TABLE bot_config ADD COLUMN auto_tune_enabled BOOLEAN DEFAULT 0",
+            "ALTER TABLE bot_config ADD COLUMN llm_api_key TEXT DEFAULT ''"
         ]
         
         for statement in migrations:
@@ -412,7 +414,7 @@ async def update_bot_config(config: dict) -> bool:
             'symbols', 'fee_rate', 'slippage_rate',
             'base_order', 'volume_multiplier', 'max_dca_layers', 'per_trade_stop_pct',
             'rsi_entry_gate', 'grid_tight', 'grid_wide', 'tp_tranche_1_pct', 'tp_tranche_2_pct',
-            'auto_tune_enabled'
+            'auto_tune_enabled', 'llm_api_key'
         ]
         for k, v in config.items():
             if k in allowed_keys:

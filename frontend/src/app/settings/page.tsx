@@ -9,6 +9,7 @@ import RiskLimitsPanel from "@/components/settings/RiskLimitsPanel";
 import StrategyTuningPanel from "@/components/settings/StrategyTuningPanel";
 import NotificationSettingsPanel from "@/components/settings/NotificationSettingsPanel";
 import TradingPairsPanel from "@/components/settings/TradingPairsPanel";
+import LlmSettingsPanel from "@/components/settings/LlmSettingsPanel";
 
 export default function SettingsPage() {
   const { theme, setTheme } = useTheme();
@@ -102,6 +103,7 @@ export default function SettingsPage() {
         <div className="space-y-6">
           <NotificationSettingsPanel />
           <TradingPairsPanel />
+          <LlmSettingsPanel />
 
           <div className="liquid-glass-card p-6 relative overflow-hidden group">
             <div className="absolute top-6 right-6">

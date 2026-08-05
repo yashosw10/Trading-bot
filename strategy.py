@@ -2,18 +2,26 @@ import asyncio
 import math
 from collections import deque
 from datetime import datetime, timezone
+import sys
+import uuid
+import joblib
+import pandas as pd
+import pandas_ta as ta
+
 from loguru import logger
 from models import TickerData, TradeSignal
 import database
 import httpx
+import quant_bridge
+import alt_data
 
 # ─────────────────────────────────────────────
 #  Configuration constants  (tweak here only)
 # ─────────────────────────────────────────────
-# ── Portfolio: $9,500 USD ────────────────────────────────────────────────────
-# Max per-coin stack (4 layers): $100 + $135 + $182 + $246 + $332 = $995
-# Max 3 coins deployed: ~$2,985  |  Remaining buffer: ~$6,515  (68% safe)
-# Global Kill fires at: −$1,425  |  Per-trade SL fires at: −8% of avg_entry
+# ── Portfolio & Risk Architecture ─────────────────────────────────────────────
+# NOTE: All dollar amounts below (BASE_ORDER) are default FALLBACKS only! 
+# The actual base_order, max_position_size, and wallet balance are dynamically 
+# fetched from the database / CoinDCX API during runtime.
 # ─────────────────────────────────────────────────────────────────────────────
 BASE_ORDER           = 100.0  # $ for the first buy
 VOLUME_MULTIPLIER    = 1.35   # Gentler curve — max Layer 4 = ~$332 per order
@@ -201,6 +209,13 @@ class SymbolState:
 # ─────────────────────────────────────────────
 
 class StrategyEngine:
+    def _now(self):
+        """Injectable clock for event-driven backtesting"""
+        if hasattr(self, '_sim_clock'):
+            return self._sim_clock
+        from datetime import datetime, timezone
+        return datetime.now(timezone.utc)
+
     def __init__(self, data_queue: asyncio.Queue, order_queue: asyncio.Queue):
         self.data_queue    = data_queue
         self.order_queue   = order_queue
@@ -215,6 +230,15 @@ class StrategyEngine:
         
         self.macro_regimes: dict[str, dict] = {}
         self.volume_profiles: dict[str, dict] = {}
+        
+        self.ml_model = None
+        self.ml_features = None
+        try:
+            self.ml_model = joblib.load("models/rf_model.pkl")
+            self.ml_features = joblib.load("models/feature_cols.pkl")
+            logger.info("Loaded Random Forest ML predictive model.")
+        except Exception as e:
+            logger.warning(f"Could not load ML model: {e}. Running without ML filters.")
 
     # ══════════════════════════════════════════
     #  Internal helpers
@@ -269,7 +293,7 @@ class StrategyEngine:
         candles = list(self.states[symbol].candles)
         return _calc_ema(candles, EMA_PERIOD), _calc_rsi(candles, RSI_PERIOD)
 
-    def _passes_entry_gate(self, symbol: str, config: dict) -> bool:
+    def _passes_entry_gate(self, symbol: str, config: dict) -> tuple[bool, float]:
         """
         Base-order gate:
           • Price must be above the 50-EMA  (confirmed uptrend)
@@ -277,25 +301,82 @@ class StrategyEngine:
         """
         st = self.states[symbol]
         price = st.raw_prices[-1] if st.raw_prices else 0.0
-        ema, rsi = self._indicators(symbol)
         
-        rsi_entry_gate = float(config.get("rsi_entry_gate", RSI_ENTRY_GATE))
-        if config.get("auto_tune_enabled"):
-            regime = self.macro_regimes.get(symbol, {}).get("regime", "bull")
-            rsi_entry_gate = 30.0 if regime == "bear" else 55.0
+        passed = False
+        kelly = 0.0
+        
+        # --- HYBRID C++ QUANT ENGINE OVERRIDE ---
+        candles = list(st.candles)
+        if len(candles) >= 20:
+            quant_data = quant_bridge.get_quant_signal(candles, 20)
+            if quant_data["signal"] == "BUY" and quant_data["confidence"] >= 0.60:
+                logger.success(
+                    f"🚀 [QUANT C++] OVERRIDE {symbol} | "
+                    f"Signal: {quant_data['signal']} | Conf: {quant_data['confidence']:.2f} | "
+                    f"Z-Score: {quant_data['z_score']:.2f} | Kelly: {quant_data['kelly_fraction']:.3f}"
+                )
+                passed = True
+                kelly = quant_data["kelly_fraction"]
+        # ----------------------------------------
+        
+        if not passed:
+            ema, rsi = self._indicators(symbol)
             
-            vol_profile = self.volume_profiles.get(symbol, {})
-            surge = vol_profile.get("surge", True)
-            if not surge:
-                rsi_entry_gate -= 10.0
-        
-        if price <= ema:
-            logger.debug(f"{symbol}: trend FAIL  price={price:.4f} EMA={ema:.4f}")
-            return False
-        if rsi >= rsi_entry_gate:
-            logger.debug(f"{symbol}: RSI FAIL  RSI={rsi:.1f}")
-            return False
-        return True
+            rsi_entry_gate = float(config.get("rsi_entry_gate", RSI_ENTRY_GATE))
+            if config.get("auto_tune_enabled"):
+                regime = self.macro_regimes.get(symbol, {}).get("regime", "bull")
+                rsi_entry_gate = 30.0 if regime == "bear" else 55.0
+                
+                vol_profile = self.volume_profiles.get(symbol, {})
+                surge = vol_profile.get("surge", True)
+                if not surge:
+                    rsi_entry_gate -= 10.0
+            
+            if price > ema and rsi < rsi_entry_gate:
+                passed = True
+                kelly = 0.0
+                
+        if not passed:
+            return False, 0.0
+            
+        # --- PHASE 5: ALTERNATIVE DATA (FEAR & GREED) ---
+        fng = alt_data.get_fear_and_greed_index()
+        if fng.get("classification") == "Extreme Greed":
+            logger.warning(f"{symbol}: Vetoing entry due to Extreme Greed macro sentiment (F&G: {fng.get('value')})")
+            return False, 0.0
+            
+        # --- PHASE 5: ML PREDICTIVE FILTER ---
+        if self.ml_model and len(st.raw_prices) >= 30:
+            try:
+                df = pd.DataFrame([{"close": p} for p in list(st.raw_prices)[-30:]])
+                df['rsi'] = df.ta.rsi(length=14)
+                df['macd'] = df.ta.macd(fast=12, slow=26, signal=9)['MACD_12_26_9']
+                
+                rolling_mean = df['close'].rolling(window=20).mean()
+                rolling_std = df['close'].rolling(window=20).std()
+                df['z_score'] = (df['close'] - rolling_mean) / rolling_std
+                
+                latest = df.iloc[-1]
+                
+                if not pd.isna(latest['rsi']) and not pd.isna(latest['macd']) and not pd.isna(latest['z_score']):
+                    features = pd.DataFrame([{
+                        'rsi': latest['rsi'],
+                        'macd': latest['macd'],
+                        'z_score': latest['z_score']
+                    }])
+                    
+                    probs = self.ml_model.predict_proba(features)[0]
+                    prob_success = probs[1]
+                    
+                    if prob_success < 0.50:
+                        logger.info(f"{symbol}: 🤖 ML VETO! Success probability: {prob_success:.1%} < 50%")
+                        return False, 0.0
+                    else:
+                        logger.success(f"{symbol}: 🤖 ML APPROVED! Success probability: {prob_success:.1%}")
+            except Exception as e:
+                logger.error(f"ML Inference failed: {e}")
+                
+        return True, kelly
 
     def _passes_dca_gate(self, symbol: str, config: dict) -> bool:
         """
@@ -393,11 +474,11 @@ class StrategyEngine:
                 
             st.dca_layer += 1
             st.trail_high = max(st.trail_high, price)
-            st.last_trade_ts = datetime.now(timezone.utc).timestamp()
+            st.last_trade_ts = self._now().timestamp()
             await self._persist_state(symbol)
 
         elif side == 'sell':
-            st.last_trade_ts = datetime.now(timezone.utc).timestamp()
+            st.last_trade_ts = self._now().timestamp()
             if label in ["STOP-LOSS", "FLASH CRASH EXIT", "PANIC SELL", "FULL EXIT"]:
                 self._reset_position(symbol, cooldown=True)
             else:
@@ -416,7 +497,7 @@ class StrategyEngine:
         st.price_low       = 0.0
         st.last_trade_ts   = 0.0
         if cooldown:
-            st.reentry_until = datetime.now(timezone.utc).timestamp() + REENTRY_COOLDOWN_S
+            st.reentry_until = self._now().timestamp() + REENTRY_COOLDOWN_S
             logger.info(f"{symbol}: {REENTRY_COOLDOWN_S}s re-entry cooldown started.")
         asyncio.create_task(self._persist_state(symbol))
 
@@ -445,7 +526,7 @@ class StrategyEngine:
             fake_ticker = TickerData(
                 symbol=sym, price_usd=price,
                 price_inr=price * usd_to_inr, price_eur=price * usd_to_eur, price_change_percent=0,
-                timestamp=datetime.now(timezone.utc)
+                timestamp=self._now()
             )
             
             mfe = (st.price_high - st.avg_entry) / st.avg_entry * 100 if st and st.avg_entry > 0 else 0.0
@@ -509,7 +590,7 @@ class StrategyEngine:
                                 "regime": regime,
                                 "price": current_price,
                                 "sma_70d": sma_70d,
-                                "updated_at": datetime.now(timezone.utc).isoformat()
+                                "updated_at": self._now().isoformat()
                             }
                             logger.info(f"{symbol} Macro Regime updated to: {regime.upper()} (Price: {current_price:.2f}, 70D SMA: {sma_70d:.2f})")
                         else:
@@ -517,7 +598,7 @@ class StrategyEngine:
                                 "regime": "bull",
                                 "price": 0.0,
                                 "sma_70d": 0.0,
-                                "updated_at": datetime.now(timezone.utc).isoformat()
+                                "updated_at": self._now().isoformat()
                             }
                 except Exception as e:
                     logger.error(f"Error fetching macro regime for {symbol}: {e}")
@@ -548,7 +629,7 @@ class StrategyEngine:
                                 "surge": surge,
                                 "avg_vol": avg_vol,
                                 "current_vol": current_vol,
-                                "updated_at": datetime.now(timezone.utc).isoformat()
+                                "updated_at": self._now().isoformat()
                             }
                         else:
                             self.volume_profiles[symbol] = {"surge": True, "avg_vol": 0, "current_vol": 0}
@@ -573,8 +654,8 @@ class StrategyEngine:
         )
 
         self.peak_equity = self.starting_balance
-        self.start_ts = datetime.now(timezone.utc).timestamp()
-        self.last_balance_reset_day = datetime.now(timezone.utc).date()
+        self.start_ts = self._now().timestamp()
+        self.last_balance_reset_day = self._now().date()
 
         # ── Hydrate all SymbolStates on boot ──────────────────────────
         import json
@@ -615,7 +696,7 @@ class StrategyEngine:
 
         while not shutdown_event.is_set():
             try:
-                now_utc = datetime.now(timezone.utc)
+                now_utc = self._now()
                 if now_utc.date() > self.last_balance_reset_day:
                     config = await database.get_bot_config()
                     active_mode = config.get("mode", "paper")
@@ -645,7 +726,8 @@ class StrategyEngine:
 
                 symbol  = ticker.symbol
                 price   = ticker.price_usd
-                now_ts  = datetime.now(timezone.utc).timestamp()
+                self._sim_clock = ticker.timestamp  # Sync internal clock to event stream
+                now_ts  = self._now().timestamp()
 
                 # ── Initialise state for new symbol ───────────────────
                 if symbol not in self.states:
@@ -807,11 +889,18 @@ class StrategyEngine:
                     if self._active_positions() >= max_open_positions:
                         self.data_queue.task_done()
                         continue
-                    if not self._passes_entry_gate(symbol, config):
+                    passes, kelly_fraction = self._passes_entry_gate(symbol, config)
+                    if not passes:
                         self.data_queue.task_done()
                         continue
 
-                    amount_fiat = min(base_order, max_position_size)
+                    if kelly_fraction > 0.0:
+                        amount_fiat = self.starting_balance * kelly_fraction
+                        logger.info(f"📐 [KELLY SIZING] {symbol} allocation: {kelly_fraction*100:.1f}% of ${self.starting_balance:.2f} = ${amount_fiat:.2f}")
+                    else:
+                        amount_fiat = base_order
+
+                    amount_fiat = min(amount_fiat, max_position_size)
                     if amount_fiat > 0:
                         st.entry_grid = grid   # lock grid at entry for all TP maths
                         await self._place_buy(symbol, amount_fiat, price, ticker, "Base Order")

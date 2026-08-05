@@ -428,6 +428,14 @@ async def api_get_config(request: Request):
         else:
             config["telegram_bot_token"] = "***"
             
+    # Mask LLM API Key
+    if config.get("llm_api_key"):
+        token = config["llm_api_key"]
+        if len(token) > 8:
+            config["llm_api_key"] = f"{token[:4]}***{token[-4:]}"
+        else:
+            config["llm_api_key"] = "***"
+            
     return config
 
 @app.put("/api/config")
@@ -438,6 +446,9 @@ async def api_put_config(config: dict, request: Request):
     # Prevent saving masked token
     if config.get("telegram_bot_token") and "***" in config["telegram_bot_token"]:
         config["telegram_bot_token"] = old_config.get("telegram_bot_token", "")
+        
+    if config.get("llm_api_key") and "***" in config["llm_api_key"]:
+        config["llm_api_key"] = old_config.get("llm_api_key", "")
     
     success = await database.update_bot_config(config)
     if success:
@@ -728,3 +739,25 @@ async def get_latest_backtest():
             if not row:
                 return None
             return dict(row)
+
+@app.get("/api/report/summary")
+async def get_report_summary(request: Request):
+    try:
+        from llm_report import generate_system_summary
+        strategy = getattr(request.app.state, "strategy_engine", None)
+        report_md = await generate_system_summary(strategy)
+        return {"status": "success", "report": report_md}
+    except Exception as e:
+        logger.error(f"Error generating summary: {e}")
+        return {"status": "error", "message": f"Server error: {str(e)}"}
+
+@app.get("/api/report/suggestions")
+async def get_report_suggestions(request: Request):
+    try:
+        from llm_report import generate_trade_suggestions
+        strategy = getattr(request.app.state, "strategy_engine", None)
+        report_md = await generate_trade_suggestions(strategy)
+        return {"status": "success", "report": report_md}
+    except Exception as e:
+        logger.error(f"Error generating AI suggestions: {e}")
+        return {"status": "error", "message": f"Server error: {str(e)}"}

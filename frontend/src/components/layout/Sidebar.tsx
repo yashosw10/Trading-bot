@@ -1,6 +1,6 @@
 "use client";
 
-import { Activity, LayoutDashboard, Settings, History, Wallet, TrendingUp, Bell } from "lucide-react";
+import { Activity, LayoutDashboard, Settings, History, Wallet, TrendingUp, Bell, FileText } from "lucide-react";
 import Link from "next/link";
 import { usePathname } from "next/navigation";
 
@@ -14,6 +14,7 @@ export default function Sidebar() {
     { name: "Performance", href: "/performance", icon: TrendingUp },
     { name: "Alerts", href: "/alerts", icon: Bell },
     { name: "Wallet", href: "/wallet", icon: Wallet },
+    { name: "Reports", href: "/reports", icon: FileText },
     { name: "Settings", href: "/settings", icon: Settings },
   ];
 
