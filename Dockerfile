@@ -11,11 +11,13 @@ RUN apt-get update && apt-get install -y \
 COPY requirements.txt .
 
 RUN pip install --no-cache-dir -r requirements.txt
+RUN pip install --no-cache-dir --pre pandas-ta
 
 # Copy the rest of the application
 COPY . .
 
 # Expose the port FastAPI runs on
+RUN chmod +x quant_engine_cpp/quant_math.exe
 EXPOSE 8000
 
 # Start the application

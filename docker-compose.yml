@@ -29,6 +29,8 @@ services:
       - "3000:3000"
     environment:
       - NEXT_PUBLIC_WS_URL=ws://<YOUR_EC2_IP>/ws
+      - BACKEND_API_URL=http://backend:8000/api
+      - API_KEY=${API_KEY}
       - NODE_ENV=production
     depends_on:
       - backend

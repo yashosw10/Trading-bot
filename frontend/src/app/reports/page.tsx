@@ -53,7 +53,7 @@ export default function ReportsPage() {
   };
 
   return (
-    <DashboardLayout title="System Reports">
+    <DashboardLayout>
       <div className="space-y-6">
         {error && (
           <div className="p-4 rounded-2xl bg-red-500/10 border border-red-500/20 text-red-500">

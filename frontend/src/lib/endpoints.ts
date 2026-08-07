@@ -1,5 +1,7 @@
 export const API_BASE_URL = '/api/proxy';
-export const WS_URL = process.env.NEXT_PUBLIC_WS_URL || 'ws://127.0.0.1:8000/ws';
+export const WS_URL = typeof window !== 'undefined' 
+  ? `${window.location.protocol === 'https:' ? 'wss:' : 'ws:'}//${window.location.host}/ws`
+  : (process.env.NEXT_PUBLIC_WS_URL || 'ws://127.0.0.1:8000/ws');
 
 export const ENDPOINTS = {
   BALANCES: `${API_BASE_URL}/balances`,
